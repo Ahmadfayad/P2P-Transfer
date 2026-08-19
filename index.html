@@ -115,11 +115,12 @@ html[dir="rtl"] .ltr-only { direction: ltr; display: inline-block; }
       </aside>
 
       <div class="space-y-6">
+        <!-- INCOMING DOCUMENTS TABLE (IN only) -->
         <section class="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-soft">
           <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 class="text-lg font-bold text-slate-900" id="tTransfersHeader">Document Exchange Log</h2>
-              <p class="text-xs text-slate-500" id="tTransfersSub">Bi-directional incoming and outgoing transfers</p>
+              <h2 class="text-lg font-bold text-slate-900" id="tTransfersHeader">Received Documents</h2>
+              <p class="text-xs text-slate-500" id="tTransfersSub">Incoming document transfers from students</p>
             </div>
             <div class="flex items-center gap-2">
               <button id="exportLogBtn" type="button" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Export Log (CSV)</button>
@@ -128,11 +129,10 @@ html[dir="rtl"] .ltr-only { direction: ltr; display: inline-block; }
             </div>
           </div>
           <div class="overflow-x-auto">
-            <table class="w-full min-w-[650px] border-collapse">
+            <table class="w-full min-w-[600px] border-collapse">
               <thead>
                 <tr class="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
-                  <th class="pb-3 pr-3">Dir</th>
-                  <th class="pb-3 pr-3">Student / Desk</th>
+                  <th class="pb-3 pr-3">Student</th>
                   <th class="pb-3 pr-3">Document</th>
                   <th class="pb-3 pr-3">Size</th>
                   <th class="pb-3 pr-3">Progress</th>
@@ -148,9 +148,11 @@ html[dir="rtl"] .ltr-only { direction: ltr; display: inline-block; }
           </div>
         </section>
 
+        <!-- MESSAGING + RETURN DOCUMENTS (with dedicated OUT log) -->
         <section class="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-soft">
           <h2 class="text-base font-bold text-slate-900" id="tBiDirPanel">Messaging &amp; Return Documents</h2>
           <p class="text-xs text-slate-600 mb-4">Send instant notes, status updates, or confirmation documents/receipts back to connected senders.</p>
+
           <div class="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
             <label for="recipientSelect" class="block text-xs font-semibold uppercase text-slate-600 mb-1">Active Student</label>
             <select id="recipientSelect" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-sky-500" disabled>
@@ -158,15 +160,29 @@ html[dir="rtl"] .ltr-only { direction: ltr; display: inline-block; }
             </select>
             <p class="mt-1 text-[11px] text-slate-500">Chat and return documents are sent only to the selected approved student.</p>
           </div>
-          <div class="grid gap-4 md:grid-cols-2">
-            <div class="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div>
+
+          <div class="grid gap-4 lg:grid-cols-2">
+            <!-- Left column: send return file + sent history -->
+            <div class="space-y-4">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <label class="block text-xs font-semibold uppercase text-slate-600 mb-1">Send File / Receipt Back to Selected Student</label>
                 <input id="returnFileInput" type="file" disabled class="block w-full text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-sky-700 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-sky-800" />
                 <button id="sendReturnFileBtn" type="button" disabled class="mt-2 rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-800 disabled:opacity-50 disabled:cursor-not-allowed">Send Document Back</button>
               </div>
+
+              <div class="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-bold uppercase tracking-wider text-emerald-800">📤 Sent Return Documents</p>
+                  <button id="clearSentBtn" type="button" class="hidden rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100">Clear</button>
+                </div>
+                <div id="sentFilesList" class="mt-2 space-y-2 max-h-64 overflow-y-auto">
+                  <p class="text-xs text-slate-500 italic" id="sentEmpty">No return documents sent yet.</p>
+                </div>
+              </div>
             </div>
-            <div class="flex flex-col rounded-xl border border-slate-200 bg-slate-50 p-3 h-64">
+
+            <!-- Right column: chat -->
+            <div class="flex flex-col rounded-xl border border-slate-200 bg-slate-50 p-3 h-72 lg:h-auto">
               <p class="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">Live Chat Stream</p>
               <div id="chatMessages" class="flex-1 overflow-y-auto space-y-2 p-2 rounded-lg bg-white border border-slate-200 text-xs">
                 <p class="text-slate-400 italic">No chat messages yet.</p>
@@ -396,8 +412,8 @@ import { joinRoom } from "https://esm.run/trystero";
       start: "Start",
       connectedSenders: "Connected Senders",
       noSenders: "No active senders connected.",
-      transfersHeader: "Document Exchange Log",
-      transfersSub: "Incoming and outgoing document transfers",
+      transfersHeader: "Received Documents",
+      transfersSub: "Incoming document transfers from students",
       biDirPanel: "Messaging & Return Documents",
       sendDocsTitle: "Send Your Documents",
       sendDocsSub: "Upload your files directly to the front desk. You can also receive return documents/receipts here.",
@@ -414,8 +430,8 @@ import { joinRoom } from "https://esm.run/trystero";
       start: "بدء",
       connectedSenders: "المرسلون المتصلون",
       noSenders: "لا يوجد مرسلون متصلون حالياً.",
-      transfersHeader: "سجل تبادل المستندات",
-      transfersSub: "المستندات الواردة والصادرة",
+      transfersHeader: "المستندات المستلمة",
+      transfersSub: "المستندات الواردة من الطلاب",
       biDirPanel: "الرسائل والمستندات المرتجعة",
       sendDocsTitle: "إرسال المستندات الخاصة بك",
       sendDocsSub: "قم برفع ملفاتك مباشرة إلى المكتب الأمامي، ويمكنك أيضاً استلام الإيصالات والمستندات المرتجعة هنا.",
@@ -730,16 +746,16 @@ import { joinRoom } from "https://esm.run/trystero";
     a.remove();
   });
 
+  // ---- INCOMING (IN) table ----
   const rowMap = new Map();
   const removedIds = new Set();
   const incomingBody = document.getElementById("incomingBody");
 
-  function createRow(dir, peer, name, size, id, mime) {
+  function createRow(peer, name, size, id, mime) {
     const tr = document.createElement("tr");
     tr.className = "border-b border-slate-100";
     tr.dataset.id = id;
     tr.innerHTML = `
-      <td class="py-2.5 pr-2"><span class="rounded px-1.5 py-0.5 text-[10px] font-bold ${dir === "IN" ? "bg-sky-100 text-sky-800" : "bg-emerald-100 text-emerald-800"}">${dir}</span></td>
       <td class="py-2.5 pr-2 font-medium text-slate-700">${escapeHtml(peer || "Unknown")}</td>
       <td class="py-2.5 pr-2 text-slate-800 font-semibold">${fileTypeIcon(mime, name)} ${escapeHtml(name)}</td>
       <td class="py-2.5 pr-2 text-slate-500">${humanFileSize(size)}</td>
@@ -780,8 +796,40 @@ import { joinRoom } from "https://esm.run/trystero";
     Array.from(rowMap.keys()).forEach((id) => removeTransferEntry(id));
   });
 
-  updateCounts();
+  // ---- OUTGOING (OUT) sent-return-documents panel ----
+  const sentFilesList = document.getElementById("sentFilesList");
 
+  function createSentCard(peerLabel, name, size, id, mime) {
+    const div = document.createElement("div");
+    div.className = "rounded-lg border border-emerald-200 bg-white p-2.5 text-xs shadow-sm";
+    div.dataset.id = id;
+    div.innerHTML = `
+      <div class="flex items-center justify-between gap-2">
+        <span class="min-w-0 truncate font-semibold text-slate-800">${fileTypeIcon(mime, name)} ${escapeHtml(name)}</span>
+        <span class="sent-status shrink-0 font-semibold text-amber-600">Sending...</span>
+      </div>
+      <p class="mt-0.5 text-[11px] text-slate-500">To: ${escapeHtml(peerLabel)} • ${humanFileSize(size)} • ${new Date().toLocaleTimeString()}</p>
+      <div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+        <div class="sent-fill h-full bg-emerald-600 w-0"></div>
+      </div>
+      <span class="sent-progress text-[10px] text-slate-500">0%</span>`;
+    return div;
+  }
+
+  function updateSentCounts() {
+    const has = sentFilesList.querySelectorAll("[data-id]").length > 0;
+    document.getElementById("sentEmpty").classList.toggle("hidden", has);
+    document.getElementById("clearSentBtn").classList.toggle("hidden", !has);
+  }
+
+  document.getElementById("clearSentBtn").addEventListener("click", () => {
+    sentFilesList.querySelectorAll("[data-id]").forEach((n) => n.remove());
+    updateSentCounts();
+  });
+
+  updateSentCounts();
+
+  // ---- Trystero action compatibility layer ----
   function parseMessageArgs(args) {
     let peerId; let metadata = {};
     const a0 = args[0]; const a1 = args[1];
@@ -1131,7 +1179,7 @@ import { joinRoom } from "https://esm.run/trystero";
           if (approvalStateOf(ctx.peerId) !== "approved") return;
           let row = rowMap.get(metadata.id);
           if (!row) {
-            row = createRow("IN", metadata.studentId || connectedSenders.get(ctx.peerId)?.id || "Unknown", metadata.name || "Document", metadata.size || 0, metadata.id, metadata.mime || "");
+            row = createRow(metadata.studentId || connectedSenders.get(ctx.peerId)?.id || "Unknown", metadata.name || "Document", metadata.size || 0, metadata.id, metadata.mime || "");
             incomingBody.prepend(row);
             rowMap.set(metadata.id, row);
             updateCounts();
@@ -1154,7 +1202,7 @@ import { joinRoom } from "https://esm.run/trystero";
           const item = { id: metadata.id, name: metadata.name || "Document", mime: metadata.mime || "", size: metadata.size || blob.size, url, studentId };
           let row = rowMap.get(metadata.id);
           if (!row) {
-            row = createRow("IN", studentId, item.name, item.size, metadata.id, item.mime);
+            row = createRow(studentId, item.name, item.size, metadata.id, item.mime);
             incomingBody.prepend(row);
             rowMap.set(metadata.id, row);
             updateCounts();
@@ -1208,10 +1256,12 @@ import { joinRoom } from "https://esm.run/trystero";
         } catch (error) { logError(error, "Send chat button handler"); }
       };
 
+      // ---- Return file: logged in the dedicated "Sent Return Documents" panel ----
       document.getElementById("sendReturnFileBtn").onclick = async () => {
         const fileInput = document.getElementById("returnFileInput");
         const file = fileInput.files[0];
         if (!file) { showToast("Please choose a file to return.", "info"); return; }
+
         const target = selectedPeerId();
         const targetSender = connectedSenders.get(target);
         if (!targetSender || targetSender.approvalState !== "approved") {
@@ -1222,10 +1272,9 @@ import { joinRoom } from "https://esm.run/trystero";
         if (file.size > MAX_FILE_SIZE_BYTES) { showToast(`"${file.name}" exceeds the 150MB size limit.`, "error"); return; }
 
         const fileId = "ret-" + Date.now();
-        const row = createRow("OUT", targetSender.id, file.name, file.size, fileId, file.type);
-        incomingBody.prepend(row);
-        rowMap.set(fileId, row);
-        updateCounts();
+        const card = createSentCard(targetSender.id, file.name, file.size, fileId, file.type);
+        sentFilesList.prepend(card);
+        updateSentCounts();
 
         try {
           await fileAction.send(file, {
@@ -1233,19 +1282,25 @@ import { joinRoom } from "https://esm.run/trystero";
             metadata: { id: fileId, name: file.name, mime: file.type, size: file.size, studentId: "Desk" },
             onProgress: (p) => {
               const pct = Math.round((p <= 1 ? p * 100 : p) || 0);
-              row.querySelector(".progress-fill").style.width = `${pct}%`;
-              row.querySelector(".progress-text").textContent = `${pct}%`;
+              card.querySelector(".sent-fill").style.width = `${pct}%`;
+              card.querySelector(".sent-progress").textContent = `${pct}%`;
             }
           });
-          row.querySelector(".status-text").textContent = "Sent";
-          row.querySelector(".status-text").className = "status-text py-2.5 pr-2 text-emerald-600 font-semibold";
+
+          const st = card.querySelector(".sent-status");
+          st.textContent = "Sent";
+          st.className = "sent-status shrink-0 font-semibold text-emerald-600";
+          card.querySelector(".sent-fill").style.width = "100%";
+          card.querySelector(".sent-progress").textContent = "100%";
+
           transferLogData.push({ id: fileId, dir: "OUT", peer: targetSender.id, name: file.name, size: file.size, time: Date.now(), status: "Sent" });
           showToast(`Sent return file ${file.name} to ${targetSender.id}.`, "success");
           fileInput.value = "";
         } catch (error) {
           logError(error, "Send return file handler");
-          row.querySelector(".status-text").textContent = "Failed";
-          row.querySelector(".status-text").className = "status-text py-2.5 pr-2 text-rose-600 font-semibold";
+          const st = card.querySelector(".sent-status");
+          st.textContent = "Failed";
+          st.className = "sent-status shrink-0 font-semibold text-rose-600";
         }
       };
 
