@@ -1,0 +1,157 @@
+// Direct connections are an optional speed boost. HTTPS remains available throughout.
+export class Direct {
+  constructor(session, send) {
+    this.session = session;
+    this.send = send;
+    this.peers = new Map();
+    this.inbox = new Map();
+  }
+  create(peer, generation) {
+    const previous = this.peers.get(peer);
+    previous?.pc.close();
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    const entry = {
+      pc,
+      generation,
+      ice: [],
+      started: Date.now(),
+      attempts: (previous?.attempts || 0) + 1,
+    };
+    this.peers.set(peer, entry);
+    pc.onicecandidate = (e) => {
+      if (e.candidate)
+        this.send(peer, {
+          generation,
+          type: "ice",
+          candidate: e.candidate.toJSON(),
+        }).catch(() => {});
+    };
+    const attach = (channel) => {
+      entry.channel = channel;
+      channel.binaryType = "arraybuffer";
+      channel.onmessage = (e) => {
+        if (
+          !(e.data instanceof ArrayBuffer) ||
+          e.data.byteLength < 44 ||
+          e.data.byteLength > 65576
+        )
+          return;
+        const bytes = new Uint8Array(e.data);
+        const id = new TextDecoder().decode(bytes.subarray(0, 36));
+        const view = new DataView(e.data);
+        const index = view.getUint32(36);
+        const part = view.getUint16(40);
+        const count = view.getUint16(42);
+        if (count < 1 || count > 10 || part >= count) return;
+        const key = peer + ":" + id + ":" + index;
+        let item = this.inbox.get(key);
+        if (!item) {
+          if (this.inbox.size >= 8)
+            this.inbox.delete(this.inbox.keys().next().value);
+          item = { parts: new Array(count), count, time: Date.now() };
+          this.inbox.set(key, item);
+        }
+        if (item.count === count) item.parts[part] = bytes.slice(44);
+      };
+    };
+    pc.ondatachannel = (e) => attach(e.channel);
+    if (this.session.self === "desk")
+      attach(pc.createDataChannel("documents", { ordered: true }));
+    return entry;
+  }
+  async start(peer) {
+    const current = this.peers.get(peer);
+    if (
+      current &&
+      (current.channel?.readyState === "open" ||
+        current.attempts >= 3 ||
+        Date.now() - current.started < 60000)
+    )
+      return;
+    const generation = crypto.randomUUID();
+    const entry = this.create(peer, generation);
+    await entry.pc.setLocalDescription(await entry.pc.createOffer());
+    await this.send(peer, {
+      generation,
+      type: "offer",
+      sdp: entry.pc.localDescription.sdp,
+    });
+  }
+  async signal(peer, data) {
+    let entry = this.peers.get(peer);
+    if (data.type === "offer" && this.session.self !== "desk") {
+      if (entry?.generation !== data.generation)
+        entry = this.create(peer, data.generation);
+      await entry.pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+      await entry.pc.setLocalDescription(await entry.pc.createAnswer());
+      await this.send(peer, {
+        generation: data.generation,
+        type: "answer",
+        sdp: entry.pc.localDescription.sdp,
+      });
+    } else if (entry?.generation === data.generation) {
+      if (data.type === "answer")
+        await entry.pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      if (data.type === "ice") entry.ice.push(data.candidate);
+    }
+    if (entry?.pc.remoteDescription)
+      for (const candidate of entry.ice.splice(0))
+        await entry.pc.addIceCandidate(candidate);
+  }
+  available(peer) {
+    return this.peers.get(peer)?.channel?.readyState === "open";
+  }
+  upload(peer, id, index, bytes) {
+    const channel = this.peers.get(peer)?.channel;
+    if (
+      channel?.readyState !== "open" ||
+      channel.bufferedAmount > 2 * 1024 * 1024
+    )
+      return false;
+    const size = 60000,
+      count = Math.ceil(bytes.length / size);
+    try {
+      for (let part = 0; part < count; part++) {
+        const data = bytes.subarray(part * size, (part + 1) * size),
+          packet = new Uint8Array(44 + data.length);
+        packet.set(new TextEncoder().encode(id));
+        const view = new DataView(packet.buffer);
+        view.setUint32(36, index);
+        view.setUint16(40, part);
+        view.setUint16(42, count);
+        packet.set(data, 44);
+        channel.send(packet);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  take(peer, id, index) {
+    for (const [key, item] of this.inbox)
+      if (Date.now() - item.time > 15000) this.inbox.delete(key);
+    const key = peer + ":" + id + ":" + index,
+      item = this.inbox.get(key);
+    if (
+      !item ||
+      item.parts.some((x) => !x) ||
+      item.parts.filter(Boolean).length !== item.count
+    )
+      return null;
+    this.inbox.delete(key);
+    const result = new Uint8Array(item.parts.reduce((n, p) => n + p.length, 0));
+    let offset = 0;
+    for (const p of item.parts) {
+      result.set(p, offset);
+      offset += p.length;
+    }
+    return result;
+  }
+  close() {
+    for (const item of this.peers.values()) item.pc.close();
+    this.peers.clear();
+    this.inbox.clear();
+  }
+}

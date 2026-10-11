@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#143e38" />
+    <title>Document Exchange · UoS</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/"
+        >↗ <span>Document Exchange<small>University of Sharjah</small></span></a
+      ><span class="pill" id="network">Checking connection</span>
+    </header>
+    <main>
+      <section id="welcome" class="welcome">
+        <div>
+          <span class="eyebrow">A simpler handover</span>
+          <h1>Your documents.<br />A clear destination.</h1>
+          <p class="intro">
+            Send a document to the desk, or receive one back. Private transfers
+            with a receipt you can trust.
+          </p>
+          <div class="features">
+            <span>✓ Encrypted files</span><span>✓ Automatic retry</span
+            ><span>✓ No account for students</span>
+          </div>
+        </div>
+        <div class="card" id="entry">
+          <form id="desk-form">
+            <span class="eyebrow">For staff</span>
+            <h2>Open your desk</h2>
+            <p>Create a private session and share its QR code with students.</p>
+            <label
+              >Desk name<input
+                id="desk-name"
+                required
+                maxlength="64"
+                placeholder="Student services"
+                autocomplete="organization" /></label
+            ><label
+              >Desk access key<input
+                id="setup-key"
+                type="password"
+                required
+                minlength="16"
+                autocomplete="off" /></label
+            ><button type="submit">Open desk <span>↗</span></button>
+            <p class="small">
+              Students: scan the desk’s QR code or open the link they share.
+            </p>
+          </form>
+          <form id="join-form" hidden>
+            <span class="eyebrow">For students</span>
+            <h2>Connect to the desk</h2>
+            <p>Your desk will approve you before any files are sent.</p>
+            <label
+              >Your name or student ID<input
+                id="student-name"
+                required
+                maxlength="64"
+                autocomplete="off"
+                placeholder="Enter your name or ID"
+            /></label>
+            <p class="small">
+              This label helps staff identify you. It does not verify your
+              identity.
+            </p>
+            <button type="submit">Request connection <span>↗</span></button>
+          </form>
+        </div>
+      </section>
+      <section id="workspace" hidden>
+        <div class="page-heading">
+          <div>
+            <span class="eyebrow" id="role-label"></span>
+            <h1 id="room-name"></h1>
+            <p id="session-note"></p>
+          </div>
+          <button class="secondary" id="leave">Close this page</button>
+        </div>
+        <div class="layout">
+          <aside>
+            <section class="card" id="invite-card" hidden>
+              <h2>Invite a student</h2>
+              <p>Ask them to scan this code. Approve their name below.</p>
+              <canvas id="qr" aria-label="Desk invitation QR code"></canvas
+              ><button class="secondary" id="copy-link">
+                Copy invitation link
+              </button>
+              <p class="small">Only share with people you want to join.</p>
+            </section>
+            <section class="card">
+              <h2 id="connections-heading">Connections</h2>
+              <div id="connections"></div>
+            </section>
+            <section class="card quiet">
+              <h2>Keep the handover safe</h2>
+              <p>
+                Keep both pages open until “Received” appears. Files stay on
+                this browser until you remove them.
+              </p>
+              <p class="small">
+                Sessions last 8 hours. PDF, DOCX, PNG and JPG · 150 MB per file
+                · 300 MB saved on this device.
+              </p>
+            </section>
+          </aside>
+          <div class="content">
+            <section class="card">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Send a document</span>
+                  <h2>A few clicks. A confirmed receipt.</h2>
+                </div>
+                <span class="tag" id="route-label"
+                  >Encrypted HTTPS available</span
+                >
+              </div>
+              <label id="recipient-label" hidden
+                >Send to<select id="recipient">
+                  <option value="">Choose an approved student</option>
+                </select></label
+              ><label class="drop" id="drop"
+                ><span class="upload-icon">↑</span
+                ><strong>Choose files or drop them here</strong
+                ><span>PDF, DOCX, PNG or JPG</span
+                ><input
+                  id="files"
+                  type="file"
+                  multiple
+                  accept=".pdf,.docx,.png,.jpg,.jpeg"
+                  aria-label="Choose documents to send"
+              /></label>
+              <p id="send-note" class="small"></p>
+            </section>
+            <section class="card">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Your handovers</span>
+                  <h2>Files & receipts</h2>
+                </div>
+                <button class="secondary compact" id="export">
+                  Export receipts
+                </button>
+              </div>
+              <div id="file-list" class="file-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+      <section class="card" id="saved-card" hidden>
+        <h2>Saved on this device</h2>
+        <p>These files remain available even after a desk session ends.</p>
+        <div id="saved-list"></div>
+      </section>
+      <div id="message" role="status" aria-live="polite" hidden></div>
+    </main>
+    <footer>
+      Document Exchange <span>Private by design. Free to use.</span>
+    </footer>
+    <dialog id="preview">
+      <div class="section-heading">
+        <h2 id="preview-title"></h2>
+        <button id="close-preview" class="secondary">Close preview</button>
+      </div>
+      <div id="preview-content"></div>
+    </dialog>
+  </body>
+</html>
