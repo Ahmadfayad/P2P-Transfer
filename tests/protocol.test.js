@@ -368,3 +368,36 @@ test("blocked RTC cannot endlessly consume free signaling quota", async () => {
     globalThis.RTCPeerConnection = previous;
   }
 });
+test("ICE that arrives before the offer is retained until remote description exists", async () => {
+  const previous = globalThis.RTCPeerConnection;
+  const applied = [];
+  globalThis.RTCPeerConnection = class {
+    async setRemoteDescription(d) {
+      this.remoteDescription = d;
+    }
+    async createAnswer() {
+      return { type: "answer", sdp: "test" };
+    }
+    async setLocalDescription(d) {
+      this.localDescription = d;
+    }
+    async addIceCandidate(candidate) {
+      assert.ok(this.remoteDescription);
+      applied.push(candidate);
+    }
+    close() {}
+  };
+  try {
+    const direct = new Direct({ self: "student" }, async () => {});
+    const generation = crypto.randomUUID(),
+      candidate = { candidate: "early" };
+    await direct.signal("desk", { generation, type: "ice", candidate });
+    assert.equal(applied.length, 0);
+    await direct.signal("desk", { generation, type: "offer", sdp: "test" });
+    assert.deepEqual(applied, [candidate]);
+    assert.equal(direct.pendingIce.size, 0);
+    direct.close();
+  } finally {
+    globalThis.RTCPeerConnection = previous;
+  }
+});

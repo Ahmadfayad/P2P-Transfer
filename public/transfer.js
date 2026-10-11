@@ -45,11 +45,14 @@ export class Exchange {
     this.keys = new Map();
     this.sent = new Map();
     this.stopped = false;
-    this.direct = new Direct(session, (to, data) =>
-      this.api("/events", {
-        method: "POST",
-        body: { to, kind: "signal", data },
-      }),
+    this.direct = new Direct(
+      session,
+      (to, data) =>
+        this.api("/events", {
+          method: "POST",
+          body: { to, kind: "signal", data },
+        }),
+      () => this.changed(this.state),
     );
   }
   api(path, options = {}) {

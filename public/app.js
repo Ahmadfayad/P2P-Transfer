@@ -203,6 +203,7 @@ function renderState(state) {
   if (state) lastState = state;
   if (!lastState) return;
   const desk = session.self === "desk";
+  $("workspace").classList.toggle("student", !desk);
   const own = lastState.peers.find((p) => p.id === session.self);
   const approved = desk || own?.state === "approved";
   $("send-note").textContent = approved

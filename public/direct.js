@@ -1,10 +1,12 @@
 // Direct connections are an optional speed boost. HTTPS remains available throughout.
 export class Direct {
-  constructor(session, send) {
+  constructor(session, send, changed = () => {}) {
     this.session = session;
     this.send = send;
+    this.changed = changed;
     this.peers = new Map();
     this.inbox = new Map();
+    this.pendingIce = new Map();
   }
   create(peer, generation) {
     const previous = this.peers.get(peer);
@@ -15,11 +17,12 @@ export class Direct {
     const entry = {
       pc,
       generation,
-      ice: [],
+      ice: this.pendingIce.get(peer + ":" + generation) || [],
       started: Date.now(),
       attempts: (previous?.attempts || 0) + 1,
     };
     this.peers.set(peer, entry);
+    this.pendingIce.delete(peer + ":" + generation);
     pc.onicecandidate = (e) => {
       if (e.candidate)
         this.send(peer, {
@@ -31,6 +34,7 @@ export class Direct {
     const attach = (channel) => {
       entry.channel = channel;
       channel.binaryType = "arraybuffer";
+      channel.onopen = channel.onclose = () => this.changed();
       channel.onmessage = (e) => {
         if (
           !(e.data instanceof ArrayBuffer) ||
@@ -81,6 +85,18 @@ export class Direct {
   }
   async signal(peer, data) {
     let entry = this.peers.get(peer);
+    // Separate HTTPS requests may deliver ICE candidates before the offer.
+    if (data.type === "ice" && entry?.generation !== data.generation) {
+      const key = peer + ":" + data.generation;
+      if (!this.pendingIce.has(key)) {
+        if (this.pendingIce.size >= 20)
+          this.pendingIce.delete(this.pendingIce.keys().next().value);
+        this.pendingIce.set(key, []);
+      }
+      const candidates = this.pendingIce.get(key);
+      if (candidates.length < 32) candidates.push(data.candidate);
+      return;
+    }
     if (data.type === "offer" && this.session.self !== "desk") {
       if (entry?.generation !== data.generation)
         entry = this.create(peer, data.generation);
@@ -153,5 +169,6 @@ export class Direct {
     for (const item of this.peers.values()) item.pc.close();
     this.peers.clear();
     this.inbox.clear();
+    this.pendingIce.clear();
   }
 }

@@ -366,6 +366,9 @@ dialog::backdrop {
   margin: auto;
 }
 @media (max-width: 850px) {
+  #workspace.student .content {
+    order: -1;
+  }
   header {
     padding: 20px;
   }
