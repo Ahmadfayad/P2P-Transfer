@@ -2,6 +2,10 @@
 
 A private document handover between a university desk and approved students. The browser attempts a direct WebRTC connection; ordinary HTTPS is always available as a fallback. No paid TURN service, database, domain or subscription is required.
 
+[Open the deployed service](https://uos-document-exchange.uos-document-exchange.workers.dev). The private staff access key is supplied separately and is never committed to this repository.
+
+The [audit of the original version](docs/AUDIT.md) documents the former impersonation, unsafe preview, false delivery, lost-file and network reliability problems. This implementation replaces the public signaling and client-side role controls with authenticated sessions, durable local files, verified receipts and HTTPS recovery. The original implementation remains in Git history; the root page points users to the new service.
+
 ## Use it
 
 Staff open the website, enter a desk name and the private desk access key, then share the generated QR code. Students open that invitation and enter a name or student ID. Staff approve each connection and can send documents back to that student.
@@ -16,7 +20,7 @@ Use Node.js 24 or newer and install dependencies with `npm ci`. Create an untrac
 
 Run `npm run check` and `npm test`. For actual browser tests, run `npx playwright install chromium`, start the development server, then run `npm run test:browser`. The test also accepts `CHROME_PATH` for an installed Chrome executable, `TEST_URL` for a deployed service, and `DESK_SETUP_KEY` for its test access key. Tests create and end their own desk sessions.
 
-The browser test checks both directions, real direct-channel negotiation followed by a deliberate mid-transfer channel failure, HTTPS with WebRTC disabled, refresh recovery, a network interruption, a lost acknowledgement, exact file bytes, and document retention after ending a session. The student page uses a phone-sized viewport. It is not a test on the university's actual network or on an actual phone.
+The browser test checks both directions, real direct-channel negotiation followed by a deliberate mid-transfer channel failure, HTTPS with WebRTC disabled, refresh recovery, a network interruption, a lost acknowledgement, exact file bytes, and document retention after ending a session. It also ends a session after all verified chunks are saved but before the final acknowledgement: the document remains recoverable, and the sender never sees a false receipt. The student page uses a phone-sized viewport. It is not a test on the university's actual network or on an actual phone.
 
 ## Deploy for free
 
@@ -25,7 +29,7 @@ The browser test checks both directions, real direct-channel negotiation followe
 3. Set the production access secret with `npx wrangler secret put DESK_SETUP_KEY`. Enter the secret when prompted. `.dev.vars` is local-only and is not uploaded automatically.
 4. Open the deployed HTTPS address. Keep the staff secret private; it must never be included in a student invitation, a public repository, or browser diagnostics.
 
-Static assets are committed, including the QR library. `npm run build:qr` rebuilds that bundle after updating its dependency. No external JavaScript/CSS CDN is needed. Wrangler deploys `public/`; the original root `index.html` belongs to the retired public-signaling version and is not used by this service. Existing GitHub Pages hosting cannot run the new server: share the new Worker address after rollout.
+Static assets are committed, including the QR library. `npm run build:qr` rebuilds that bundle after updating its dependency. No external JavaScript/CSS CDN is needed. Wrangler deploys `public/`; the root `index.html` is a migration landing page. GitHub Pages can serve that landing page but cannot run the new API: share the new Worker address after rollout.
 
 ## What recovery does
 
@@ -43,7 +47,7 @@ The QR fragment pins the desk public-key fingerprint and contains an invitation 
 - Workers Free currently allows 100,000 requests/day across the account. Durable Objects Free has its own request, execution, storage and SQL read/write quotas. If any quota is exhausted, the service can stop until the quota resets. This project does not purchase additional capacity. Other projects on the same account share quotas. Check usage during the university pilot.
 - Both devices must be online within the session. Sleeping phones, closed tabs, browser eviction, device failure, or manually clearing site data can prevent continuation. Save completed documents to permanent storage. IndexedDB is not a backup service.
 - A blocked UDP route or restricted NAT does not prevent the HTTPS path. If IT blocks the Worker HTTPS address, or the whole network is offline, application code cannot guarantee a connection. Check that the same origin's `/api/health` and authenticated room requests succeed from the campus desk. An IT-approved address is the dependable solution if that address is blocked.
-- Preview is restricted to PDF/images; PDF frames are sandboxed. DOCX is download-only and checked as a ZIP container. This is not an antivirus or a document-content scanner. Treat documents received from unknown people accordingly.
+- Preview is restricted to verified PDF/images with a fixed MIME type. PDF uses the browser's native viewer; HTML, SVG and arbitrary text are never embedded as executable documents. DOCX is download-only and checked as a ZIP container. This is not an antivirus or a document-content scanner. Treat documents received from unknown people accordingly.
 - Names, filenames, sizes and connection metadata are visible to the host. End-to-end encryption protects document contents against passive relay access; a compromised site serving malicious JavaScript remains a threat.
 
 Cloudflare documentation: [Workers Free limits](https://developers.cloudflare.com/workers/platform/limits/), [Durable Object pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [Durable Object limits](https://developers.cloudflare.com/durable-objects/platform/limits/). Verify these before changing deployment scale or plan.
@@ -57,4 +61,4 @@ Cloudflare documentation: [Workers Free limits](https://developers.cloudflare.co
 - `server/worker.js`: same-origin API, desk ownership, approval, relay, quotas and expiry.
 - `tests/`: security/protocol checks and real browser recovery tests.
 
-The old page used third-party public signaling and client-side role messages. The new service changes its protocol and cannot connect to an old page. Existing saved data in the old application's storage is not migrated or deleted; download any needed documents from the old page before switching.
+The old page used third-party public signaling and client-side role messages. The new service changes its protocol and cannot connect to an old page. Save needed documents from any existing old tabs **before closing or refreshing them**, then create new QR invitations. Legacy chat is not included in this document-handover release. The original implementation is available at Git commit `2fe23dea44b5ddce4ee27996dd0f3374e1d96248`.

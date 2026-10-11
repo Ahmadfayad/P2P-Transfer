@@ -126,7 +126,10 @@ export class TransferHub {
       CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, payload TEXT NOT NULL, created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS limits (id TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS peers_room ON peers(room);
+      CREATE INDEX IF NOT EXISTS peers_token ON peers(room, token);
       CREATE INDEX IF NOT EXISTS transfers_room ON transfers(room);
+      CREATE INDEX IF NOT EXISTS transfers_sender ON transfers(room, sender);
+      CREATE INDEX IF NOT EXISTS transfers_recipient ON transfers(room, recipient);
       CREATE INDEX IF NOT EXISTS events_target ON events(room, recipient, id);
     `);
   }
@@ -398,9 +401,10 @@ export class TransferHub {
               roomId,
             )
           : this.rows(
-              "SELECT * FROM transfers WHERE room = ? AND (sender = ? OR recipient = ?) ORDER BY created",
+              "SELECT * FROM transfers WHERE room = ? AND sender = ? UNION ALL SELECT * FROM transfers WHERE room = ? AND recipient = ? ORDER BY created",
               roomId,
               who,
+              roomId,
               who,
             );
       const events = this.rows(

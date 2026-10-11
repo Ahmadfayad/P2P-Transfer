@@ -1,6 +1,6 @@
 import * as db from "./storage.js";
 import { identity, fingerprint } from "./crypto.js";
-import { Exchange, request } from "./transfer.js";
+import { Exchange, request, finishFile } from "./transfer.js";
 import { csvCell, chunkCount, fileType } from "./protocol.js";
 import QRCode from "./vendor/qrcode.js";
 const $ = (id) => document.getElementById(id);
@@ -52,11 +52,16 @@ function download(file) {
   a.click();
 }
 function preview(file) {
+  const type = fileType(file.name);
+  if (
+    !file.completed ||
+    !["application/pdf", "image/png", "image/jpeg"].includes(type)
+  )
+    throw new Error("This file cannot be previewed. Save a copy to open it.");
   if (previewURL) URL.revokeObjectURL(previewURL);
-  previewURL = URL.createObjectURL(file.blob);
+  previewURL = URL.createObjectURL(new Blob([file.blob], { type }));
   $("preview-title").textContent = file.name;
   $("preview-content").replaceChildren();
-  const type = fileType(file.name);
   if (type.startsWith("image/")) {
     const img = element("img");
     img.src = previewURL;
@@ -66,7 +71,7 @@ function preview(file) {
     const frame = element("iframe");
     frame.src = previewURL;
     frame.title = "PDF document preview";
-    frame.setAttribute("sandbox", "");
+    // Chrome's native PDF viewer needs this frame unsandboxed; only a fixed PDF MIME reaches it.
     $("preview-content").append(frame);
   }
   $("preview").showModal();
@@ -103,6 +108,15 @@ async function removeFile(file) {
 }
 async function renderFiles() {
   const files = await db.all("files");
+  for (const file of files) {
+    if (
+      !file.blob &&
+      file.kind === "incoming" &&
+      file.next === chunkCount(file.size) &&
+      (file.room !== session?.room || exchange?.stopped)
+    )
+      await finishFile(file);
+  }
   const current = session ? files.filter((f) => f.room === session.room) : [];
   const older = files.filter((f) => !session || f.room !== session.room);
   renderList($("file-list"), current, true);
@@ -200,6 +214,7 @@ function renderList(container, files, current) {
   }
 }
 function renderState(state) {
+  if (!session || exchange?.stopped) return;
   if (state) lastState = state;
   if (!lastState) return;
   const desk = session.self === "desk";
@@ -302,7 +317,7 @@ async function poll(instance) {
   let delay = 15000;
   try {
     const active = await instance.tick();
-    if (instance !== exchange) {
+    if (instance !== exchange || instance.stopped) {
       instance.polling = false;
       return;
     }
@@ -324,7 +339,7 @@ async function poll(instance) {
     if (active && Date.now() - instance.lastProgress > 10000) delay = 2000;
     if (active && Date.now() - instance.lastProgress > 60000) delay = 15000;
   } catch (error) {
-    if (instance !== exchange) {
+    if (instance !== exchange || instance.stopped) {
       instance.polling = false;
       return;
     }
@@ -337,6 +352,7 @@ async function poll(instance) {
       instance.polling = false;
       $("network").textContent = "Session ended";
       message(error.message + " Saved files remain on this device.");
+      renderFiles().catch((e) => message(e.message));
       return;
     }
     if (

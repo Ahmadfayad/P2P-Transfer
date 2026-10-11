@@ -14,6 +14,7 @@ const browser = await chromium.launch({
 });
 const errors = [];
 const contexts = [];
+const ownedRooms = [];
 const payload = Buffer.alloc(8 * 1048576, 42);
 payload.write("%PDF-1.7\n");
 const digest = createHash("sha256").update(payload).digest("hex");
@@ -65,6 +66,14 @@ async function waitReceipt(page, name) {
     .getByText("Received ✓", { exact: true })
     .waitFor({ timeout: 120000 });
 }
+async function until(check, timeout = 60000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  assert.fail("The expected saved-file state was not reached.");
+}
 try {
   for (const direct of [false, true]) {
     const { page: desk } = await client(direct),
@@ -88,6 +97,16 @@ try {
         key: await fingerprint(s.publicKey),
       };
     });
+    ownedRooms.push(
+      await desk.evaluate(async () => {
+        const db = await import("/storage.js");
+        const s = await db.get(
+          "sessions",
+          localStorage.getItem("exchange-session"),
+        );
+        return { room: s.room, token: s.token };
+      }),
+    );
     await student.goto(base + "/#" + new URLSearchParams(saved));
     await student
       .getByLabel("Your name or student ID")
@@ -166,13 +185,11 @@ try {
         .nth(1)
         .getAttribute("value");
       await desk.locator("#recipient").selectOption(approved);
-      await desk
-        .locator("#files")
-        .setInputFiles({
-          name: "returned.pdf",
-          mimeType: "application/pdf",
-          buffer: payload,
-        });
+      await desk.locator("#files").setInputFiles({
+        name: "returned.pdf",
+        mimeType: "application/pdf",
+        buffer: payload,
+      });
       await waitReceipt(student, "returned.pdf");
       assert.equal(await localDigest(student, "returned.pdf"), digest);
       console.log("PASS desk-to-student transfer");
@@ -189,16 +206,67 @@ try {
       path: "test-results/student-" + (direct ? "direct" : "https") + ".png",
       fullPage: true,
     });
+    if (!direct) {
+      await desk.route("**/ack", async (route) => {
+        if (route.request().postDataJSON().next === 2) await route.abort();
+        else await route.continue();
+      });
+      await student.locator("#files").setInputFiles({
+        name: "deadline.pdf",
+        mimeType: "application/pdf",
+        buffer: payload.subarray(0, 1048576),
+      });
+      await until(() =>
+        desk.evaluate(async () => {
+          const db = await import("/storage.js");
+          return (await db.all("files")).some(
+            (f) => f.name === "deadline.pdf" && f.next === 2 && !f.blob,
+          );
+        }),
+      );
+    }
     desk.once("dialog", (dialog) => dialog.accept());
     await desk.getByRole("button", { name: "End desk session" }).click();
     await desk.getByRole("heading", { name: "Saved on this device" }).waitFor();
     assert.equal(await localDigest(desk, name), digest);
+    if (!direct) {
+      await until(
+        () =>
+          desk.evaluate(async () => {
+            const db = await import("/storage.js");
+            return (await db.all("files")).some(
+              (f) => f.name === "deadline.pdf" && f.completed && f.blob,
+            );
+          }),
+        10000,
+      );
+      assert.equal(
+        await localDigest(desk, "deadline.pdf"),
+        createHash("sha256").update(payload.subarray(0, 1048576)).digest("hex"),
+      );
+      assert.equal(
+        await student
+          .locator(".file")
+          .filter({ has: student.getByText("deadline.pdf", { exact: true }) })
+          .getByText("Received ✓", { exact: true })
+          .count(),
+        0,
+      );
+      console.log(
+        "PASS all verified local chunks remain recoverable after the session ends before its receipt",
+      );
+    }
     console.log("PASS ending session preserves saved documents");
     for (const ctx of contexts.splice(0)) await ctx.close();
   }
   assert.deepEqual(errors, []);
   console.log("PASS no browser exceptions");
 } finally {
+  for (const room of ownedRooms)
+    await fetch(base + "/api/rooms/" + room.room, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer " + room.token },
+    }).catch(() => {});
   for (const ctx of contexts) await ctx.close();
   await browser.close();
 }

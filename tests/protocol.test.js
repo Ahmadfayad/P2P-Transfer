@@ -300,10 +300,28 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
     ).status,
     200,
   );
+  const returned = {
+    id: crypto.randomUUID(),
+    name: "return.pdf",
+    size: 8,
+    to: student.id,
+  };
+  assert.equal(
+    (await api(base + "/transfers", "POST", returned, room.token)).status,
+    201,
+  );
   const state = await (
     await api(base + "/state", "GET", undefined, student.token)
   ).json();
-  assert.equal(state.transfers[0].state, "received");
+  assert.equal(state.transfers.find((t) => t.id === id).state, "received");
+  assert.equal(
+    state.transfers.find((t) => t.id === returned.id).recipient,
+    student.id,
+  );
+  const otherState = await (
+    await api(base + "/state", "GET", undefined, stranger.token)
+  ).json();
+  assert.equal(otherState.transfers.length, 0);
   assert.equal(state.peers.length, 1);
   const hub2 = new TransferHub(hub.ctx, hub.env);
   assert.equal(
