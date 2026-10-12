@@ -196,7 +196,7 @@ try {
       size: 8,
       kind: "outgoing",
     });
-    const bytes = new Uint8Array(1024 * 1024).fill(42);
+    const bytes = new Uint8Array(3 * 1024 * 1024).fill(42);
     bytes.set(new TextEncoder().encode("%PDF-1.7"));
     const healthy = await window.exchange.queue(
       new File([bytes], "healthy.pdf"),
@@ -253,7 +253,39 @@ try {
     await route.abort("failed");
     await guest.unroute("**/ack");
   });
+  await staff.evaluate((peer) => {
+    const api = window.exchange.api.bind(window.exchange);
+    window.uploadMetrics = { calls: 0, active: 0, maximum: 0 };
+    // Simulate a nominally connected channel that silently loses all packets.
+    window.exchange.direct.peers.set(peer.id, {
+      pc: { connectionState: "connected", iceConnectionState: "connected", close() {} },
+      channel: { readyState: "open", bufferedAmount: 0, send() {}, close() {} },
+      attempts: 1, started: Date.now(),
+    });
+    window.exchange.api = async (path, options) => {
+      if (options?.method !== "PUT") return api(path, options);
+      const metrics = window.uploadMetrics;
+      metrics.calls++;
+      metrics.maximum = Math.max(metrics.maximum, ++metrics.active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return await api(path, options);
+      } finally { metrics.active--; }
+    };
+  }, peer);
   await tick(staff);
+  assert.equal(await staff.evaluate(() => window.uploadMetrics.calls), 0);
+  await staff.evaluate(() => {
+    for (const chunks of window.exchange.sent.values())
+      for (const chunk of chunks.values()) chunk.time = 0;
+  });
+  await tick(staff);
+  assert.equal(await staff.evaluate((peer) => window.exchange.direct.peers.get(peer.id).relayOnly, peer), true);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM chunks WHERE transfer = ?").get(ids.healthy).n, 4);
+  assert.deepEqual(await staff.evaluate(() => window.uploadMetrics), { calls: 4, active: 0, maximum: 4 });
+  await tick(staff);
+  assert.equal(await staff.evaluate(() => window.uploadMetrics.calls), 4);
+  console.log("PASS stalled direct packets switch to four concurrent HTTPS chunks without duplicate stored uploads");
   await tick(guest);
   // Refresh with both verified chunks and the missing-source failure retained.
   for (const [page, account, id] of [
@@ -302,7 +334,7 @@ try {
       const file = await db.get("files", id),
         bytes = new Uint8Array(await file.blob.arrayBuffer());
       return (
-        bytes.length === 1024 * 1024 &&
+        bytes.length === 3 * 1024 * 1024 &&
         new TextDecoder().decode(bytes.slice(0, 8)) === "%PDF-1.7" &&
         bytes.slice(8).every((n) => n === 42)
       );

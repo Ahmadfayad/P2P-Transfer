@@ -1,5 +1,6 @@
 import {
   CHUNK_SIZE,
+  WINDOW_SIZE,
   LOCAL_LIMIT,
   chunkCount,
   chunkLength,
@@ -247,7 +248,10 @@ export class Exchange {
         continue;
       }
       const advanced = await this.attempt(t.id, async () => {
-        if (t.to === this.session.self) await this.receive(t, files, state);
+        if (t.to === this.session.self) {
+          await this.receive(t, files, state);
+          row.next = t.next;
+        }
         else if (t.state === "accepted") await this.send(t, files, state);
       });
       active ||= advanced;
@@ -263,33 +267,39 @@ export class Exchange {
         "The original file is missing from this device. Cancel and resend it.",
       );
     if (t.next >= chunkCount(t.size)) return;
-    const previous = this.sent.get(t.id);
-    if (previous?.index === t.next && Date.now() - previous.time < 1500) return;
-    const bytes =
-      previous?.index === t.next
-        ? previous.bytes
-        : await encrypt(
-            await this.key(t.to, state),
-            t,
-            t.next,
-            await file.blob
-              .slice(t.next * CHUNK_SIZE, (t.next + 1) * CHUNK_SIZE)
-              .arrayBuffer(),
+    let window = this.sent.get(t.id);
+    if (!window) this.sent.set(t.id, (window = new Map()));
+    for (const index of window.keys())
+      if (index < t.next) window.delete(index);
+    const uploads = [];
+    for (let index = t.next; index < Math.min(chunkCount(t.size), t.next + WINDOW_SIZE); index++) {
+      uploads.push((async () => {
+        let chunk = window.get(index);
+        if (chunk?.stored || (chunk?.direct && Date.now() - chunk.time < 1500)) return;
+        if (!chunk) {
+          const bytes = await encrypt(
+            await this.key(t.to, state), t, index,
+            await file.blob.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE).arrayBuffer(),
           );
-    const direct =
-      previous?.index !== t.next &&
-      this.direct.upload(t.to, t.id, t.next, bytes);
-    record("send-chunk", {
-      index: t.next,
-      size: bytes.byteLength,
-      state: direct ? "direct" : "https",
-    });
-    if (!direct)
-      await this.api("/transfers/" + t.id + "/chunks/" + t.next, {
-        method: "PUT",
-        body: bytes,
-      });
-    this.sent.set(t.id, { index: t.next, bytes, time: Date.now() });
+          chunk = { bytes, time: Date.now() };
+          window.set(index, chunk);
+          chunk.direct = this.direct.upload(t.to, t.id, index, bytes);
+        } else if (chunk.direct) {
+          // A channel can remain open after ICE fails. Stop paying this delay for every chunk.
+          this.direct.fallback(t.to);
+          chunk.direct = false;
+        }
+        record("send-chunk", { index, size: chunk.bytes.byteLength, state: chunk.direct ? "direct" : "https" });
+        if (!chunk.direct) {
+          await this.api("/transfers/" + t.id + "/chunks/" + index, { method: "PUT", body: chunk.bytes });
+          chunk.stored = true;
+        }
+      })());
+    }
+    // Settle the whole bounded window before retrying, so uploads never overlap ticks.
+    const results = await Promise.allSettled(uploads);
+    const failure = results.find((r) => r.status === "rejected");
+    if (failure) throw failure.reason;
   }
   async receive(t, files, state) {
     let file = files.find((f) => f.id === t.id);
@@ -332,9 +342,10 @@ export class Exchange {
         method: "POST",
         body: { next: t.next + 1 },
       });
-      return;
+      t.next++;
     }
-    if (file.next < total) {
+    // Drain only the existing relay window, saving each chunk before its ordered ACK.
+    for (let drained = 0; file.next < total && drained < WINDOW_SIZE; drained++) {
       let bytes = this.direct.take(t.from, t.id, t.next);
       if (!bytes) {
         const response = await this.api(
@@ -375,8 +386,9 @@ export class Exchange {
         method: "POST",
         body: { next: file.next },
       });
-      return;
+      t.next = file.next;
     }
+    if (file.next < total) return;
     await finishFile(file);
     await this.api("/transfers/" + t.id + "/complete", {
       method: "POST",

@@ -25,6 +25,12 @@ Files are encrypted in the browser using P-256 ECDH and AES-GCM. WebRTC is optio
 
 Use **Connection help & system log → Download system log** on the affected browser. Select the network type first. Ask staff to export their log too. Logs include bounded recent requests, errors, timing, connection events and transfer progress; staff logs also include recent server records. They exclude passwords, tokens, invitation fragments and document contents. They cannot reveal the campus firewall's internal rules.
 
+## Campus pilot, 12 October 2026
+
+Four sanitized exports from the university Ethernet desk and a mobile-data guest show successful sign-in, joining and approval. The roughly 3 MB transfer was still incomplete at the last export. Ordinary room requests took about 0.5-0.6 seconds; guest chunk uploads took about 1.8-2.4 seconds. The old client sent one chunk per acknowledgement and uploaded some stored chunks again. WebRTC connected briefly, then failed while its data channel still reported open. A 20-second request timeout occurred while the phone browser was hidden. These records do not establish a specific firewall rule or explain the background timeout.
+
+The client now fills the existing four-chunk window concurrently, avoids duplicate stored uploads and drains the receiver window with ordered persisted acknowledgements. Optional signaling does not hold up HTTPS, and unacknowledged direct packets disable direct sending for that connection. No database migration, account-cache bypass, buffer-limit increase or paid service is involved. Regression checks cover four concurrent uploads, stalled direct packets, refresh/lost-ACK recovery with exact 3 MB bytes and the student/staff approval UI. Faster campus transfer times still require a new on-site test, with both browsers kept visible initially.
+
 ## Local development
 
 Install dependencies with `npm ci`. Create an ignored `.dev.vars` using the existing authorized account credentials: `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `BETTER_AUTH_URL=http://127.0.0.1:8788`. Obtain secrets privately from the existing deployment; do not paste them into ChatGPT project files. Run `npx wrangler dev --port 8788`.

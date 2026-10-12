@@ -84,7 +84,7 @@ export class Direct {
     const current = this.peers.get(peer);
     if (
       current &&
-      (current.channel?.readyState === "open" ||
+      (this.available(peer) || current.relayOnly ||
         current.attempts >= 3 ||
         Date.now() - current.started < 60000)
     )
@@ -92,11 +92,11 @@ export class Direct {
     const generation = crypto.randomUUID();
     const entry = this.create(peer, generation);
     await entry.pc.setLocalDescription(await entry.pc.createOffer());
-    await this.send(peer, {
+    this.send(peer, {
       generation,
       type: "offer",
       sdp: entry.pc.localDescription.sdp,
-    });
+    }).catch(() => {});
   }
   async signal(peer, data) {
     let entry = this.peers.get(peer);
@@ -117,11 +117,11 @@ export class Direct {
         entry = this.create(peer, data.generation);
       await entry.pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
       await entry.pc.setLocalDescription(await entry.pc.createAnswer());
-      await this.send(peer, {
+      this.send(peer, {
         generation: data.generation,
         type: "answer",
         sdp: entry.pc.localDescription.sdp,
-      });
+      }).catch(() => {});
     } else if (entry?.generation === data.generation) {
       if (data.type === "answer")
         await entry.pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
@@ -132,12 +132,22 @@ export class Direct {
         await entry.pc.addIceCandidate(candidate);
   }
   available(peer) {
-    return this.peers.get(peer)?.channel?.readyState === "open";
+    const entry = this.peers.get(peer);
+    return Boolean(
+      entry && !entry.relayOnly &&
+      entry.pc.connectionState === "connected" &&
+      ["connected", "completed"].includes(entry.pc.iceConnectionState) &&
+      entry.channel?.readyState === "open",
+    );
+  }
+  fallback(peer) {
+    const entry = this.peers.get(peer);
+    if (entry) entry.relayOnly = true;
   }
   upload(peer, id, index, bytes) {
     const channel = this.peers.get(peer)?.channel;
     if (
-      channel?.readyState !== "open" ||
+      !this.available(peer) ||
       channel.bufferedAmount > 2 * 1024 * 1024
     )
       return false;
