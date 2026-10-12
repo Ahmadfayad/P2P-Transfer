@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "BETTER_AUTH_URL": "https://uos-document-exchange.uos-document-exchange.workers.dev",
-    "FRONTEND_ORIGINS": "https://uos-document-exchange.vercel.app,https://uos-document-exchange-ahmadfayads-projects.vercel.app,https://uos-document-exchange-kaw2cnssh-ahmadfayads-projects.vercel.app,https://uos-document-exchange-bmht22dr4-ahmadfayads-projects.vercel.app",
+    "FRONTEND_ORIGINS": "https://uos-document-exchange.vercel.app,https://uos-document-exchange-ahmadfayads-projects.vercel.app,https://uos-document-exchange-kaw2cnssh-ahmadfayads-projects.vercel.app,https://uos-document-exchange-bmht22dr4-ahmadfayads-projects.vercel.app,https://uos-document-exchange-git-reliable-8f1b8e-ahmadfayads-projects.vercel.app",
   },
   "assets": {
     "directory": "./public",
