@@ -46,6 +46,10 @@ try {
   await guest.goto(base + "/#" + new URLSearchParams(other));
   await guest.locator("#student-name").fill("Guest");
   await guest.getByRole("button", { name: "Request connection" }).click();
+  await guest
+    .getByRole("heading", { name: "Waiting for staff approval" })
+    .waitFor();
+  await otherDesk.locator("#approval-approve").click({ timeout: 20000 });
   await guest.getByText("Your student connection", { exact: true }).waitFor();
   await desk.reload();
   await desk.getByRole("button", { name: "End desk session" }).waitFor();
@@ -65,10 +69,11 @@ try {
   await ownGuest.locator("#student-name").fill("Own guest");
   await ownGuest.getByRole("button", { name: "Request connection" }).click();
   await ownGuest
-    .getByText(
-      "This browser owns this desk. Open its student invitation on a separate device or browser profile.",
-      { exact: true },
-    )
+    .locator("#student-error")
+    .filter({
+      hasText:
+        "This browser owns this desk. Open its student invitation on a separate device or browser profile.",
+    })
     .waitFor();
   console.log(
     "PASS joining a desk as its student cannot mix sender/receiver storage in the same profile",

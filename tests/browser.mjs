@@ -113,6 +113,7 @@ try {
     await desk
       .getByRole("button", { name: "Approve", exact: true })
       .click({ timeout: 20000 });
+    await student.locator("#workspace").waitFor({ timeout: 20000 });
     const name = direct ? "direct.pdf" : "recovery.pdf";
     let relayUploads = 0;
     if (direct) {
