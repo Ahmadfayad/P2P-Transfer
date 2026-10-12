@@ -22,6 +22,8 @@ Use separate devices or browser profiles for a desk and its student. Tabs retain
 
 Verified chunks are saved in IndexedDB before acknowledgement. Interrupted transfers retry from their saved offset. Completed incoming files and original outgoing files remain locally available after the session ends. **Send again** starts a new transfer across expired sessions. A final receipt is never issued for a document that was not fully assembled and saved.
 
+A failed file retries independently with backoff and shows its error beside that file; other documents can continue. Ending a visitor connection releases an active slot and closes its direct channel when the browser next observes revoked approval. Received files and visitor history remain available.
+
 Files and encryption keys are separated by account in the browser. Sign-out hides them, and another person's login cannot display them. **Recover earlier files** can claim this browser's files from before sign-in into one account, retaining the original copy. Valid old room credentials can be bound to that account once. Recover only files belonging to you. Browser storage is not a backup.
 
 ## Implementation
@@ -35,6 +37,8 @@ PDF and image previews use fixed canonical MIME types. HTML and SVG are not embe
 ## Connection diagnostics and work PC
 
 Expand **Connection help & system log** and select the affected network before downloading the JSON. Export from both sender and receiver when possible. The browser retains the last 1,200 events across refreshes in that tab; server records retain at most 2,000 entries for up to 24 hours. Logs include HTTP timing/status/correlation IDs, retries, network changes, WebRTC state and transfer offsets. Staff can export their room server records; admins can export recent system errors. Passwords, invitation keys, document contents and filenames are excluded. Export promptly after the problem; closing the tab can clear its local log.
+
+Diagnostic format 2 uses known route templates and error categories, never free-form exception messages. Previously saved browser events and server routes are sanitized again before export.
 
 See [the work-PC handoff](docs/PROJECT-HANDOFF.md) to continue from the same GitHub branch. Local project folders are not copied between computers by conversation sync.
 
@@ -54,6 +58,8 @@ Run `npm run check` and `npm test`. Real browser checks: install Chromium (`npx 
 
 Checks cover CSV validation, six-character login, role enforcement, password changes/resets, disabling accounts, reload, account isolation, recovery of earlier files, authenticated relay, exact file bytes, offline/refresh recovery, lost acknowledgements, direct-to-HTTPS recovery, reverse transfers and safe previews.
 
+`npm run test:reliability` runs a separate loopback SQLite relay and real Chromium browsers without deployment secrets or real accounts. It checks that a broken first transfer does not block a healthy file, exact saved bytes survive refresh and a lost acknowledgement, and stale signaling after revocation cannot reopen a direct connection. Use `CHROME_PATH` if the installed browser differs from Playwright's bundled version.
+
 ## Free deployment
 
 Use Cloudflare Workers Free. Replace `account_id` in `wrangler.jsonc` for another account and run `npx wrangler login`. Store `DATABASE_URL` and `BETTER_AUTH_SECRET` with `npx wrangler secret put`, then `npm run deploy`. Set `BETTER_AUTH_URL` to the live Cloudflare origin. Local `.dev.vars` is not uploaded. Do not rotate the auth secret without a password migration: it also peppers password hashes. The old `DESK_SETUP_KEY` is unused.
@@ -62,7 +68,7 @@ Vercel Hobby can serve `public/` and proxy `/api/*` to Cloudflare through `verce
 
 ## Limits and remaining risks
 
-- PDF, DOCX, PNG and JPG; 150 MiB/file; 300 MiB reserved local files; eight-hour rooms; ten desks; twenty students/desk; one hundred transfers/room. One small relay hub serves this deployment.
+- PDF, DOCX, PNG and JPG; 150 MiB/file; 300 MiB reserved local files; eight-hour rooms; ten desks; twenty active/pending students per desk; two hundred visitor history records and one hundred transfers per room. Ended visitors release an active slot without deleting history. One small relay hub serves this deployment.
 - Remote buffering is bounded to 32 MiB and four chunks per transfer. Expired metadata/chunks are cleaned by an alarm. Idle polling is fifteen seconds; active polling slows when progress stops. Failed requests back off. Direct negotiation is capped at three attempts/peer/page; HTTPS remains available.
 - Free Cloudflare, Neon and Vercel quotas are shared with other projects. Exhausted quotas or provider outages can interrupt service; no paid capacity or upgrades are configured. Neon is required for authenticated API access, and a cold database can add latency.
 - Sleeping devices, closed tabs, browser eviction, cleared site data and network outages can prevent continuation. Save received documents to permanent storage.

@@ -539,3 +539,153 @@ test("ICE that arrives before the offer is retained until remote description exi
     globalThis.RTCPeerConnection = previous;
   }
 });
+
+test("ended visitors release capacity without deleting transfer history", async () => {
+  const { hub, database } = service();
+  try {
+    const key = (await identity()).publicKey;
+    const room = await (
+      await hub.fetch(
+        new Request("https://test/api/rooms", {
+          method: "POST",
+          headers: { "X-Account-ID": "owner", "X-Account-Role": "staff" },
+          body: JSON.stringify({ name: "Desk", publicKey: key }),
+        }),
+      )
+    ).json();
+    const peers = Array.from({ length: 20 }, () => crypto.randomUUID());
+    for (const id of peers)
+      database
+        .prepare("INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(
+          room.id,
+          id,
+          id,
+          "Student",
+          JSON.stringify(key),
+          "pending",
+          Date.now(),
+        );
+    const transfer = crypto.randomUUID();
+    database
+      .prepare(
+        "INSERT INTO transfers(id,room,sender,recipient,name,size,state,created) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        transfer,
+        room.id,
+        peers[0],
+        "desk",
+        "saved.pdf",
+        8,
+        "received",
+        Date.now(),
+      );
+    const join = () =>
+      hub.fetch(
+        new Request(`https://test/api/rooms/${room.id}/join`, {
+          method: "POST",
+          headers: { "X-Access-Mode": "guest", "X-Invite": room.invite },
+          body: JSON.stringify({ name: "New student", publicKey: key }),
+        }),
+      );
+    assert.equal((await join()).status, 429);
+    const ended = await hub.fetch(
+      new Request(`https://test/api/rooms/${room.id}/peers/${peers[0]}`, {
+        method: "POST",
+        headers: {
+          "X-Account-ID": "owner",
+          "X-Account-Role": "staff",
+          Authorization: "Bearer " + room.token,
+        },
+        body: JSON.stringify({ state: "declined" }),
+      }),
+    );
+    assert.equal(ended.status, 200);
+    assert.equal((await join()).status, 201);
+    const reapprove = await hub.fetch(
+      new Request(`https://test/api/rooms/${room.id}/peers/${peers[0]}`, {
+        method: "POST",
+        headers: {
+          "X-Account-ID": "owner",
+          "X-Account-Role": "staff",
+          Authorization: "Bearer " + room.token,
+        },
+        body: JSON.stringify({ state: "approved" }),
+      }),
+    );
+    assert.equal(reapprove.status, 429);
+    assert.equal(
+      database.prepare("SELECT state FROM transfers WHERE id = ?").get(transfer)
+        .state,
+      "received",
+    );
+    database.prepare("UPDATE peers SET state = 'declined'").run();
+    for (let i = 21; i < 200; i++) {
+      const id = crypto.randomUUID();
+      database
+        .prepare("INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(
+          room.id,
+          id,
+          id,
+          "Student",
+          JSON.stringify(key),
+          "declined",
+          Date.now(),
+        );
+    }
+    assert.equal((await join()).status, 429);
+  } finally {
+    database.close();
+  }
+});
+
+test("server diagnostic exports sanitize old and new untrusted paths", async () => {
+  const { hub, database } = service();
+  try {
+    const path = "/api/rooms/password=short6/transcript.pdf";
+    await hub.fetch(new Request("https://test" + path));
+    database
+      .prepare(
+        "INSERT INTO diagnostics(time,room,route,status,duration,method,request_id) VALUES(?,?,?,?,?,?,?)",
+      )
+      .run(Date.now(), "short6", path, 404, 0, "transcript.pdf", "short6");
+    const log = await (
+      await hub.fetch(new Request("https://internal/system-log"))
+    ).text();
+    assert.equal(log.includes("short6"), false);
+    assert.equal(log.includes("transcript.pdf"), false);
+    assert.ok(log.includes("[unknown-route]"));
+  } finally {
+    database.close();
+  }
+});
+
+test("revoked direct peers close their channel and discard only their packets", () => {
+  const direct = new Direct({ self: "desk" }, async () => {});
+  let closed = 0;
+  for (const peer of ["ended", "kept"])
+    direct.peers.set(peer, {
+      pc: {
+        close() {
+          closed++;
+        },
+      },
+      channel: {
+        close() {
+          closed++;
+        },
+      },
+    });
+  direct.inbox.set("ended:file:0", {});
+  direct.inbox.set("kept:file:0", {});
+  direct.pendingIce.set("ended:generation", []);
+  direct.retain(new Set(["kept"]));
+  assert.equal(closed, 2);
+  assert.deepEqual([...direct.peers.keys()], ["kept"]);
+  assert.deepEqual([...direct.inbox.keys()], ["kept:file:0"]);
+  assert.equal(direct.pendingIce.size, 0);
+  direct.close();
+  assert.equal(closed, 4);
+});

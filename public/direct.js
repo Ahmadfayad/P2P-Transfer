@@ -180,8 +180,20 @@ export class Direct {
     }
     return result;
   }
+  retain(approved) {
+    for (const [peer, item] of this.peers) {
+      if (approved.has(peer)) continue;
+      item.channel?.close?.();
+      item.pc.close();
+      this.peers.delete(peer);
+    }
+    for (const key of this.inbox.keys())
+      if (!approved.has(key.split(":")[0])) this.inbox.delete(key);
+    for (const key of this.pendingIce.keys())
+      if (!approved.has(key.split(":")[0])) this.pendingIce.delete(key);
+  }
   close() {
-    for (const item of this.peers.values()) item.pc.close();
+    this.retain(new Set());
     this.peers.clear();
     this.inbox.clear();
     this.pendingIce.clear();

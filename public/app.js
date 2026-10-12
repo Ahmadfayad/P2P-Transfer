@@ -246,7 +246,8 @@ function renderList(container, files, current) {
       progress.setAttribute("aria-label", "Transfer progress for " + file.name);
       row.append(progress);
     }
-    if (t?.error) row.append(element("p", t.error, "small"));
+    const error = t?.error || exchange?.retries.get(file.id)?.message;
+    if (error) row.append(element("p", error, "small"));
     const actions = element("div", undefined, "actions");
     if (file.blob) {
       actions.append(

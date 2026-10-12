@@ -78,6 +78,7 @@ export class Exchange {
     this.cursor = 0;
     this.keys = new Map();
     this.sent = new Map();
+    this.retries = new Map();
     this.stopped = false;
     this.direct = new Direct(
       session,
@@ -138,7 +139,34 @@ export class Exchange {
     this.changed();
     return id;
   }
+  async attempt(id, action) {
+    const retry = this.retries.get(id);
+    if (retry?.after > Date.now()) return false;
+    try {
+      await action();
+      this.retries.delete(id);
+      return true;
+    } catch (error) {
+      if ([401, 410].includes(error.status)) throw error;
+      const attempts = (retry?.attempts || 0) + 1;
+      const delay = Math.min(30000, 3000 * 2 ** Math.min(attempts - 1, 4));
+      this.retries.set(id, {
+        attempts,
+        after: Date.now() + delay,
+        message: error.message,
+      });
+      this.transferError ||= error;
+      record("transfer-retry", {
+        status: error.status,
+        attempts,
+        duration: delay,
+        message: error.name,
+      });
+      return false;
+    }
+  }
   async tick() {
+    this.transferError = null;
     const state = await (await this.api("/state?since=" + this.cursor)).json();
     this.state = state;
     if (
@@ -148,12 +176,20 @@ export class Exchange {
       throw new Error(
         "The desk identity changed. Stop and ask for a new invitation.",
       );
+    const own = state.peers.find((p) => p.id === this.session.self);
+    const approved = new Set(
+      this.session.self === "desk"
+        ? state.peers.filter((p) => p.state === "approved").map((p) => p.id)
+        : own?.state === "approved"
+          ? ["desk"]
+          : [],
+    );
+    this.direct.retain(approved);
     for (const event of state.events) {
-      if (event.kind === "signal")
+      if (event.kind === "signal" && approved.has(event.from))
         await this.direct.signal(event.from, event.data).catch(() => {});
       this.cursor = event.id;
     }
-    const own = state.peers.find((p) => p.id === this.session.self);
     if (this.session.self === "desk")
       for (const peer of state.peers.filter((p) => p.state === "approved"))
         await this.direct.start(peer.id).catch(() => {});
@@ -189,22 +225,35 @@ export class Exchange {
           !state.peers.some((p) => p.id === file.to && p.state === "approved")
         )
           continue;
-        await this.api("/transfers", {
-          method: "POST",
-          body: { id: file.id, name: file.name, size: file.size, to: file.to },
-        });
-        active = true;
+        const offered = await this.attempt(file.id, () =>
+          this.api("/transfers", {
+            method: "POST",
+            body: {
+              id: file.id,
+              name: file.name,
+              size: file.size,
+              to: file.to,
+            },
+          }),
+        );
+        active ||= offered;
       }
     }
     for (const row of state.transfers) {
       if (this.stopped) break;
       const t = { ...row, from: row.sender, to: row.recipient };
-      if (t.state === "rejected" || t.state === "received") continue;
-      active = true;
-      if (t.to === this.session.self) await this.receive(t, files, state);
-      else if (t.state === "accepted") await this.send(t, files, state);
+      if (t.state === "rejected" || t.state === "received") {
+        this.retries.delete(t.id);
+        continue;
+      }
+      const advanced = await this.attempt(t.id, async () => {
+        if (t.to === this.session.self) await this.receive(t, files, state);
+        else if (t.state === "accepted") await this.send(t, files, state);
+      });
+      active ||= advanced;
     }
     this.changed(state);
+    if (this.transferError && !active) throw this.transferError;
     return active;
   }
   async send(t, files, state) {

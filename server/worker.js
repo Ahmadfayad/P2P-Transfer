@@ -7,6 +7,8 @@ import {
   validKey,
   publicKey,
   uuid,
+  diagnosticRoute,
+  diagnosticRecord,
 } from "../public/protocol.js";
 import { createAuth, permittedRole, publicAuthPaths } from "./auth.js";
 import { parseUsersCSV } from "../public/user-csv.js";
@@ -240,7 +242,7 @@ export default {
       );
     const headers = new Headers(response.headers);
     headers.set("X-Request-ID", requestId);
-    headers.set("X-App-Version", "guest-diagnostics-v1");
+    headers.set("X-App-Version", "reliable-diagnostics-v2");
     if (
       url.pathname.startsWith("/api/") &&
       response.status >= 400 &&
@@ -252,7 +254,7 @@ export default {
             method: "POST",
             body: JSON.stringify({
               requestId,
-              route: url.pathname,
+              route: diagnosticRoute(url.pathname),
               method: request.method,
               status: response.status,
             }),
@@ -412,6 +414,9 @@ export class TransferHub {
   one(query, ...args) {
     return this.rows(query, ...args)[0];
   }
+  diagnosticRecords(query, ...args) {
+    return this.rows(query, ...args).map(diagnosticRecord);
+  }
   cleanup() {
     const now = Date.now();
     this.sql.exec(
@@ -506,10 +511,16 @@ export class TransferHub {
       this.sql.exec(
         "INSERT INTO diagnostics (time, room, request_id, method, route, status, duration) VALUES (?, ?, ?, ?, ?, ?, ?)",
         Date.now(),
-        path.split("/")[3],
-        request.headers.get("X-Request-ID"),
-        request.method,
-        path,
+        uuid(path.split("/")[3]) ? path.split("/")[3] : null,
+        uuid(request.headers.get("X-Request-ID"))
+          ? request.headers.get("X-Request-ID")
+          : null,
+        ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"].includes(
+          request.method,
+        )
+          ? request.method
+          : "[unknown-method]",
+        diagnosticRoute(path),
         response.status,
         Date.now() - started,
       );
@@ -525,7 +536,7 @@ export class TransferHub {
     const method = request.method;
     if (url.pathname === "/system-log" && method === "GET")
       return json(
-        this.rows(
+        this.diagnosticRecords(
           "SELECT time, room, request_id, method, route, status, duration FROM diagnostics ORDER BY id DESC LIMIT 300",
         ),
       );
@@ -551,9 +562,13 @@ export class TransferHub {
       this.sql.exec(
         "INSERT INTO diagnostics (time, request_id, method, route, status, duration) VALUES (?, ?, ?, ?, ?, ?)",
         Date.now(),
-        body.requestId,
-        body.method,
-        body.route,
+        uuid(body.requestId) ? body.requestId : null,
+        ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"].includes(
+          body.method,
+        )
+          ? body.method
+          : "[unknown-method]",
+        diagnosticRoute(body.route),
         body.status,
         0,
       );
@@ -671,10 +686,18 @@ export class TransferHub {
         "This desk session has ended.",
       );
       check(
-        this.one("SELECT count(*) AS n FROM peers WHERE room = ?", roomId).n <
-          20,
+        this.one(
+          "SELECT count(*) AS n FROM peers WHERE room = ? AND state != 'declined'",
+          roomId,
+        ).n < 20,
         429,
         "This desk is full. Please try again later.",
+      );
+      check(
+        this.one("SELECT count(*) AS n FROM peers WHERE room = ?", roomId).n <
+          200,
+        429,
+        "This session has reached its visitor history limit. Open a new desk session.",
       );
       this.sql.exec(
         "INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -763,7 +786,7 @@ export class TransferHub {
         "Only the desk owner can export server records.",
       );
       return json(
-        this.rows(
+        this.diagnosticRecords(
           "SELECT time, request_id, method, route, status, duration FROM diagnostics WHERE room = ? ORDER BY id DESC LIMIT 300",
           roomId,
         ),
@@ -849,15 +872,21 @@ export class TransferHub {
         400,
         "Invalid approval.",
       );
-      check(
-        this.one(
-          "SELECT id FROM peers WHERE room = ? AND id = ?",
-          roomId,
-          segments[4],
-        ),
-        404,
-        "Student not found.",
+      const targetPeer = this.one(
+        "SELECT id, state FROM peers WHERE room = ? AND id = ?",
+        roomId,
+        segments[4],
       );
+      check(targetPeer, 404, "Student not found.");
+      if (body.state === "approved" && targetPeer.state === "declined")
+        check(
+          this.one(
+            "SELECT count(*) AS n FROM peers WHERE room = ? AND state != 'declined'",
+            roomId,
+          ).n < 20,
+          429,
+          "This desk is full. End a connection before approving another student.",
+        );
       this.sql.exec(
         "UPDATE peers SET state = ? WHERE room = ? AND id = ?",
         body.state,
