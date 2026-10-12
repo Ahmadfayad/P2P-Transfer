@@ -1086,6 +1086,34 @@ footer {
 #approval-count {
   margin: 16px 0;
 }
+.waiting-spinner {
+  display: block;
+  width: 38px;
+  height: 38px;
+  margin: 20px auto;
+  border: 4px solid #e1e5f5;
+  border-top-color: #5c63ce;
+  border-radius: 50%;
+  animation: waiting-turn 1s linear infinite;
+}
+.waiting-spinner[hidden] { display: none; }
+@keyframes waiting-turn { to { transform: rotate(360deg); } }
+.connection-badge {
+  display: inline-block;
+  margin: 8px 0;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: #edf3ff;
+  color: #354381;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ended-connections {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #dce3f2;
+}
+.ended-connections summary { cursor: pointer; color: #59667c; }
 .connection-dialog [role="alert"] {
   color: #a02c35;
   overflow-wrap: anywhere;

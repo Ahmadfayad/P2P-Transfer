@@ -31,6 +31,12 @@ Four sanitized exports from the university Ethernet desk and a mobile-data guest
 
 The client now fills the existing four-chunk window concurrently, avoids duplicate stored uploads and drains the receiver window with ordered persisted acknowledgements. Optional signaling does not hold up HTTPS, and unacknowledged direct packets disable direct sending for that connection. No database migration, account-cache bypass, buffer-limit increase or paid service is involved. Regression checks cover four concurrent uploads, stalled direct packets, refresh/lost-ACK recovery with exact 3 MB bytes and the student/staff approval UI. Faster campus transfer times still require a new on-site test, with both browsers kept visible initially.
 
+## Waiting and connection display
+
+The student gate includes a rotating checking/waiting indicator with reduced-motion support. Staff see only pending/approved visitors in the main list; ended requests are grouped by entered name/ID in a collapsed section. Matching a past entered label shows a returning notice in the approval popup; matching an active label warns about another connection. Neither match grants approval or merges peer/file ownership. A previously observed inactive peer with a fresh heartbeat is marked as reconnected until this staff page or desk session resets. Heartbeat inactivity is not proof of a disconnected network.
+
+The recommended next transport change is persistent WebSocket push/streaming on the existing SQLite Durable Object, using hibernation, bounded buffers and saved-chunk recovery. It would remove idle polling delays and per-message HTTP authentication round trips, while retaining direct WebRTC as an optional route and HTTPS recovery. This is a recommendation, not implemented in this UI change. Socket authentication, account revocation, guest approval and room ownership must remain enforced; secrets must never enter socket URLs or logs. Campus WebSocket connectivity and free quotas require validation before making it the primary route.
+
 ## Local development
 
 Install dependencies with `npm ci`. Create an ignored `.dev.vars` using the existing authorized account credentials: `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `BETTER_AUTH_URL=http://127.0.0.1:8788`. Obtain secrets privately from the existing deployment; do not paste them into ChatGPT project files. Run `npx wrangler dev --port 8788`.

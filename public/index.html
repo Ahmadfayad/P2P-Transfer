@@ -106,8 +106,12 @@
               <p class="small">Only share with people you want to join.</p>
             </section>
             <section class="card">
-              <h2 id="connections-heading">Connections</h2>
+              <h2 id="connections-heading">Active connections</h2>
               <div id="connections"></div>
+              <details id="ended-connections" class="ended-connections" hidden>
+                <summary id="ended-connections-summary">Ended connections</summary>
+                <div id="ended-connections-list"></div>
+              </details>
             </section>
             <section class="card quiet">
               <h2>Keep the handover safe</h2>
@@ -206,6 +210,7 @@
         <button type="submit">Request connection <span>↗</span></button>
       </form>
       <div id="student-phase" role="status" aria-live="polite" hidden>
+        <span id="student-waiting-spinner" class="waiting-spinner" aria-hidden="true" hidden></span>
         <p id="student-identity" class="connection-identity"></p>
         <p id="student-phase-text"></p>
         <button id="student-cancel" type="button" class="secondary" hidden>
@@ -226,6 +231,7 @@
       <h2 id="approval-title">A student wants to connect</h2>
       <p>Name or student ID</p>
       <p id="approval-identity" class="connection-identity"></p>
+      <p id="approval-returning" class="connection-badge" hidden></p>
       <p class="small">
         This information is self-reported. Check it with the person at your desk
         before approving.

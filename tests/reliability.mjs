@@ -483,6 +483,9 @@ try {
     .getByRole("heading", { name: "Waiting for staff approval" })
     .waitFor();
   assert.equal(await uiStudent.locator("#workspace").isVisible(), false);
+  assert.equal(await uiStudent.locator("#student-waiting-spinner").isVisible(), true);
+  assert.equal(await uiStudent.locator("#student-waiting-spinner").evaluate(
+    (el) => getComputedStyle(el).animationName), "waiting-turn");
   assert.equal(await uiStudent.locator("#files").isDisabled(), true);
   await uiStudent.locator("#files").setInputFiles({
     name: "before-approval.pdf",
@@ -535,6 +538,9 @@ try {
   );
   assert.equal(await uiStaff.locator("#approval-identity script").count(), 0);
   await uiStaff.locator("#approval-reject").click();
+  await uiStaff.locator("#ended-connections").waitFor({ state: "visible" });
+  assert.equal(await uiStaff.locator("#ended-connections").evaluate((el) => el.open), false);
+  assert.equal((await uiStaff.locator("#connections").textContent()).includes("U12345"), false);
   await uiStudent
     .getByRole("heading", { name: "Request not accepted" })
     .waitFor({ timeout: 20000 });
@@ -545,6 +551,20 @@ try {
   await uiStaff.locator("#approval-approve").click();
   await uiSecond.locator("#workspace").waitFor({ timeout: 20000 });
   assert.equal(await uiSecond.locator("#files").isEnabled(), true);
+  assert.equal(await uiSecond.locator("#student-waiting-spinner").isVisible(), false);
+  // A stale heartbeat is inactivity, not a revoked approval. Resume the same ID.
+  await uiStaff.route("**/state?*", async (route) => {
+    const response = await route.fetch();
+    const state = await response.json();
+    for (const peer of state.peers)
+      if (peer.state === "approved") peer.seen = Date.now() - 60000;
+    await route.fulfill({ response, json: state });
+    await uiStaff.unroute("**/state?*");
+  });
+  await uiStaff.evaluate(() => dispatchEvent(new Event("online")));
+  await uiStaff.locator("#connections").getByText("Approved · page inactive; waiting to reconnect", { exact: true }).waitFor();
+  await uiStaff.evaluate(() => dispatchEvent(new Event("online")));
+  await uiStaff.locator("#connections").getByText("Reconnected — same session", { exact: true }).waitFor();
   await uiSecond.reload();
   await uiSecond.locator("#workspace").waitFor();
   assert.equal(
@@ -555,6 +575,16 @@ try {
   await uiStudent
     .getByRole("heading", { name: "Connect to the desk" })
     .waitFor();
+  await uiStudent.locator("#student-name").fill("U12345 <script>alert(1)</script>");
+  await uiStudent.locator("#join-form button").click();
+  await uiStudent.getByRole("heading", { name: "Waiting for staff approval" }).waitFor();
+  await uiStaff.locator("#approval-returning").waitFor({ state: "visible", timeout: 20000 });
+  assert.equal(await uiStaff.locator("#approval-returning").textContent(), "Returning name/ID — check identity");
+  assert.equal(await uiStudent.locator("#workspace").isVisible(), false);
+  await uiStaff.locator("#approval-reject").click();
+  await uiStudent.getByRole("heading", { name: "Request not accepted" }).waitFor({ timeout: 20000 });
+  await uiStudent.locator("#student-cancel").click();
+  await uiStudent.getByRole("heading", { name: "Connect to the desk" }).waitFor();
   await uiStudent.locator("#student-name").fill("Cancel this request");
   await uiStudent.locator("#join-form button").click();
   await uiStudent

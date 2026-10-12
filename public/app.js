@@ -28,6 +28,17 @@ let exchange, session, lastState, timer, toastTimer, previewURL;
 let studentPhase = "checking",
   approval;
 const urls = new Map();
+const inactivePeers = new Set(), reconnectedPeers = new Set();
+const peerLabel = (name) => name.trim().toLowerCase().replace(/\s+/g, " ");
+function returnNotice(peer) {
+  const matches = lastState?.peers.filter(
+    (p) => p.id !== peer.id && peerLabel(p.name) === peerLabel(peer.name),
+  ) || [];
+  if (matches.some((p) => p.state !== "declined"))
+    return "Another connection uses this name/ID — check identity";
+  if (matches.length) return "Returning name/ID — check identity";
+  return "";
+}
 setDiagnosticSnapshot(async () => ({
   role: session?.self === "desk" ? "staff" : guest ? "guest" : "signed-out",
   room: session?.room,
@@ -94,6 +105,9 @@ function showStudentPhase(phase) {
   if (!guest) return;
   studentPhase = phase;
   const dialog = $("student-gate");
+  const waiting = ["checking", "pending"].includes(phase);
+  $("student-waiting-spinner").hidden = !waiting;
+  $("student-phase").setAttribute("aria-busy", String(waiting));
   $("files").disabled = phase !== "approved";
   $("workspace").hidden = phase !== "approved";
   if (phase === "approved") {
@@ -142,6 +156,9 @@ function showApproval(peer) {
     $("approval-error").textContent = "";
   }
   $("approval-identity").textContent = peer.name;
+  const notice = returnNotice(peer);
+  $("approval-returning").textContent = notice;
+  $("approval-returning").hidden = !notice;
   const count = lastState.peers.filter((p) => p.state === "pending").length;
   $("approval-count").textContent =
     count > 1 ? `${count} requests waiting. Review them one at a time.` : "";
@@ -417,7 +434,31 @@ function renderState(state) {
       element("option", "Choose an approved student"),
     );
     $("recipient").firstChild.value = "";
-    for (const peer of lastState.peers) {
+    const activePeers = lastState.peers.filter((p) => p.state !== "declined");
+    const endedPeers = lastState.peers.filter((p) => p.state === "declined");
+    $("ended-connections").hidden = !endedPeers.length;
+    $("ended-connections-summary").textContent = `Ended connections (${endedPeers.length})`;
+    $("ended-connections-list").replaceChildren();
+    const endedNames = new Map();
+    for (const peer of endedPeers) {
+      const key = peerLabel(peer.name);
+      const group = endedNames.get(key) || { name: peer.name, count: 0 };
+      group.count++;
+      endedNames.set(key, group);
+    }
+    for (const group of endedNames.values()) {
+      const row = element("div", undefined, "peer");
+      row.append(element("strong", group.name), element("p",
+        `${group.count} ended or declined request${group.count === 1 ? "" : "s"}`,
+        "small"));
+      $("ended-connections-list").append(row);
+    }
+    for (const peer of activePeers) {
+      const inactive = Date.now() - peer.seen > 30000;
+      if (peer.state === "approved") {
+        if (inactive) inactivePeers.add(peer.id);
+        else if (inactivePeers.delete(peer.id)) reconnectedPeers.add(peer.id);
+      }
       const row = element("div", undefined, "peer");
       row.append(
         element("strong", peer.name),
@@ -427,13 +468,16 @@ function renderState(state) {
             ? "Wants to connect"
             : peer.state === "approved"
               ? "Approved" +
-                (Date.now() - peer.seen > 30000
-                  ? " · waiting for their page"
+                (inactive
+                  ? " · page inactive; waiting to reconnect"
                   : " · page active")
               : "Declined",
           "small",
         ),
       );
+      const notice = returnNotice(peer) ||
+        (!inactive && reconnectedPeers.has(peer.id) ? "Reconnected — same session" : "");
+      if (notice) row.append(element("span", notice, "connection-badge"));
       if (peer.state === "pending") {
         row.append(button("Review request", () => showApproval(peer)));
       }
@@ -454,11 +498,11 @@ function renderState(state) {
     }
     if ([...$("recipient").options].some((o) => o.value === selected))
       $("recipient").value = selected;
-    if (!lastState.peers.length)
+    if (!activePeers.length)
       $("connections").append(
         element(
           "p",
-          "No students yet. Share your QR code to get started.",
+          "No active requests or students. Share your QR code to connect.",
           "small",
         ),
       );
@@ -479,8 +523,8 @@ function renderState(state) {
         "small",
       ),
     );
-  $("route-label").textContent = [...exchange.direct.peers.values()].some(
-    (p) => p.channel?.readyState === "open",
+  $("route-label").textContent = [...exchange.direct.peers.keys()].some(
+    (peer) => exchange.direct.available(peer),
   )
     ? "Direct + HTTPS recovery"
     : "Encrypted HTTPS";
@@ -559,6 +603,8 @@ async function begin(saved) {
   showApproval(null);
   if (guest) showStudentPhase("checking");
   lastState = null;
+  inactivePeers.clear();
+  reconnectedPeers.clear();
   await db.put("sessions", saved);
   sessionStorage.setItem(sessionKey, saved.id);
   localStorage.setItem(sessionKey, saved.id);
