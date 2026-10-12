@@ -1,9 +1,13 @@
 import "./analytics.js";
+import { trackedFetch } from "./diagnostics.js";
 export let currentUser;
 const accountChannel = new BroadcastChannel("document-exchange-account");
-accountChannel.onmessage = () => location.reload();
+accountChannel.onmessage = () => {
+  if (location.pathname !== "/student" && !location.hash.includes("room="))
+    location.reload();
+};
 export async function accountRequest(path, body) {
-  const response = await fetch("/api/" + path, {
+  const response = await trackedFetch("/api/" + path, {
     signal: AbortSignal.timeout(20000),
     method: body === undefined ? "GET" : "POST",
     credentials: "same-origin",
@@ -35,6 +39,8 @@ export async function requireLogin() {
   const login = document.getElementById("login");
   try {
     currentUser = (await accountRequest("auth/get-session"))?.user;
+    if (currentUser && !["staff", "admin"].includes(currentUser.role))
+      currentUser = undefined;
   } catch {
     error.textContent =
       "Account service unavailable. Please try signing in again.";
@@ -51,6 +57,10 @@ export async function requireLogin() {
             email: form.elements.email.value.trim(),
             password: form.elements.password.value,
           });
+          if (!["staff", "admin"].includes(result.user?.role))
+            throw new Error(
+              "Students must use the desk QR code without an account.",
+            );
           form.elements.password.value = "";
           accountChannel.postMessage("signed-in");
           resolve(result.user);

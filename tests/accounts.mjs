@@ -8,13 +8,10 @@ import {
   credentials,
   cleanupAuthFixtures,
   testHeaders,
+  makeLegacyStudentFixture,
 } from "./auth-helper.mjs";
 const base = process.env.TEST_URL || "http://127.0.0.1:8788";
-const adminFile = await readFile("../ADMIN-ACCESS-PRIVATE.txt", "utf8");
-const administrator = {
-  email: adminFile.match(/^Email: (.+)$/m)[1],
-  password: adminFile.match(/^Temporary password: (.+)$/m)[1],
-};
+const administrator = credentials.admin;
 const browser = await chromium.launch({
   headless: true,
   ...(process.env.CHROME_PATH
@@ -68,7 +65,7 @@ try {
     .waitFor();
   const email = `csv-test-${randomBytes(6).toString("hex")}@example.invalid`,
     password = randomBytes(3).toString("hex");
-  const csv = `email,name,role,password\r\n${email},"Imported, person",student,${password}\r\n`;
+  const csv = `email,name,role,password\r\n${email},"Imported, person",staff,${password}\r\n`;
   await adminPage.getByLabel("Users CSV").setInputFiles({
     name: "users.csv",
     mimeType: "text/csv",
@@ -117,25 +114,7 @@ try {
     200,
   );
   await student.goto(base);
-  await student
-    .getByText(
-      "Open the invitation link or scan the QR code from your desk to start a transfer.",
-      { exact: true },
-    )
-    .waitFor();
-  assert.equal(
-    await student.getByRole("button", { name: "Open desk" }).isVisible(),
-    false,
-  );
-  assert.equal(
-    (
-      await student.request.post(base + "/api/rooms", {
-        data: {},
-        headers: { "X-Account-Role": "admin" },
-      })
-    ).status(),
-    403,
-  );
+  await student.getByRole("button", { name: "Open desk" }).waitFor();
   assert.equal(
     (await student.request.get(base + "/api/admin/users")).status(),
     403,
@@ -143,7 +122,7 @@ try {
   await student.reload();
   await student.getByRole("button", { name: "Sign out" }).waitFor();
   console.log(
-    "PASS CSV preview/import, exact six-character login, five-character rejection, student permissions and session reload",
+    "PASS CSV preview/import, exact six-character login, five-character rejection, employee permissions and session reload",
   );
   assert.equal(
     (
@@ -354,6 +333,22 @@ try {
   assert.equal(await guest.locator("#legacy-recovery").isVisible(), false);
   console.log(
     "PASS signing in as another person cannot reveal the previous account's saved documents",
+  );
+  await makeLegacyStudentFixture();
+  assert.equal(
+    (await guest.request.post(base + "/api/rooms", { data: {} })).status(),
+    401,
+  );
+  assert.equal(
+    (
+      await guest.request.post(base + "/api/auth/sign-in/email", {
+        data: credentials.student,
+      })
+    ).status(),
+    403,
+  );
+  console.log(
+    "PASS legacy student accounts cannot retain employee access or sign in",
   );
   await mkdir("test-results", { recursive: true });
   await adminPage.evaluate(() => window.scrollTo(0, 0));

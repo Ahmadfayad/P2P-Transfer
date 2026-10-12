@@ -5,6 +5,7 @@
   "buildCommand": null,
   "installCommand": "",
   "rewrites": [
+    { "source": "/student", "destination": "/index.html" },
     {
       "source": "/api/:path*",
       "destination": "https://uos-document-exchange.uos-document-exchange.workers.dev/api/:path*"

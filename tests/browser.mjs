@@ -78,7 +78,7 @@ try {
       { page: student, ctx: studentContext } = await client(direct);
     await student.setViewportSize({ width: 390, height: 844 });
     await login(desk, base);
-    await login(student, base, "student");
+
     await desk.goto(base);
     await desk.getByLabel("Desk name", { exact: true }).fill("Test desk");
     await desk.getByRole("button", { name: "Open desk" }).click();
@@ -108,6 +108,7 @@ try {
     );
     await student.goto(base + "/#" + new URLSearchParams(saved));
     ownedRooms[ownedRooms.length - 1].request = desk.request;
+    await student.locator("#student-name").fill("Test student");
     await student.getByRole("button", { name: "Request connection" }).click();
     await desk
       .getByRole("button", { name: "Approve", exact: true })
@@ -146,7 +147,7 @@ try {
       await desk.reload();
       await student.reload().catch(() => {});
       await studentContext.setOffline(false);
-      await student.goto(base);
+      await student.goto(base + "/student");
     } else {
       await desk.waitForFunction(
         () => document.querySelector("progress")?.value >= 2,
@@ -203,6 +204,22 @@ try {
       path: "test-results/student-" + (direct ? "direct" : "https") + ".png",
       fullPage: true,
     });
+    await student.locator(".diagnostics summary").click();
+    await student
+      .locator(".diagnostics select")
+      .selectOption({ label: "University Wi-Fi" });
+    const downloaded = student.waitForEvent("download");
+    await student.getByRole("button", { name: "Download system log" }).click();
+    const report = JSON.parse(
+      await readFile(await (await downloaded).path(), "utf8"),
+    );
+    assert.equal(report.network, "University Wi-Fi");
+    assert.ok(report.events.some((e) => e.event === "request"));
+    assert.ok(!JSON.stringify(report).includes(saved.invite));
+    assert.ok(!JSON.stringify(report).includes("recovery.pdf"));
+    console.log(
+      "PASS downloadable guest diagnostics exclude invitation keys and filenames",
+    );
     if (!direct) {
       await desk.route("**/ack", async (route) => {
         if (route.request().postDataJSON().next === 2) await route.abort();

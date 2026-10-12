@@ -2,13 +2,13 @@ import { chromium } from "playwright";
 import { readFile, mkdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { cleanupAuthFixtures, testHeaders } from "./auth-helper.mjs";
+import {
+  credentials,
+  cleanupAuthFixtures,
+  testHeaders,
+} from "./auth-helper.mjs";
 const base = process.env.TEST_URL || "http://127.0.0.1:8788";
-const privateFile = await readFile("../ADMIN-ACCESS-PRIVATE.txt", "utf8");
-const admin = {
-  email: privateFile.match(/^Email: (.+)$/m)[1],
-  password: privateFile.match(/^Temporary password: (.+)$/m)[1],
-};
+const admin = credentials.admin;
 const browser = await chromium.launch({
   headless: true,
   ...(process.env.CHROME_PATH
@@ -43,7 +43,7 @@ try {
     )
       creates++;
   });
-  for (const role of ["student", "staff", "admin"]) {
+  for (const role of ["staff", "admin"]) {
     const email = `manual-ui-${role}-${randomBytes(6).toString("hex")}@example.invalid`;
     await page.getByRole("button", { name: "Add user", exact: true }).click();
     const dialog = page.locator("#add-user-dialog");
@@ -88,7 +88,7 @@ try {
     assert.equal(await dialog.locator("input[name=password]").inputValue(), "");
   }
   console.log(
-    "PASS manual creation for all three roles, six-character passwords, validation and password clearing",
+    "PASS manual creation for both employee roles, six-character passwords, validation and password clearing",
   );
   await page.getByRole("button", { name: "Add user", exact: true }).click();
   await page

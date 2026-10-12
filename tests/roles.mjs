@@ -44,6 +44,7 @@ try {
     other = await openDesk(otherDesk, "Other desk");
   const guest = await first.newPage();
   await guest.goto(base + "/#" + new URLSearchParams(other));
+  await guest.locator("#student-name").fill("Guest");
   await guest.getByRole("button", { name: "Request connection" }).click();
   await guest.getByText("Your student connection", { exact: true }).waitFor();
   await desk.reload();
@@ -61,6 +62,7 @@ try {
   );
   const ownGuest = await first.newPage();
   await ownGuest.goto(base + "/#" + new URLSearchParams(own));
+  await ownGuest.locator("#student-name").fill("Own guest");
   await ownGuest.getByRole("button", { name: "Request connection" }).click();
   await ownGuest
     .getByText(

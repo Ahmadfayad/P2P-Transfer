@@ -77,6 +77,85 @@ function service() {
     database,
   };
 }
+test("QR guests need an invitation and private peer token, cannot impersonate a desk", async () => {
+  const { hub, database } = service();
+  const key = (await identity()).publicKey;
+  const room = await (
+    await hub.fetch(
+      new Request("https://test/api/rooms", {
+        method: "POST",
+        headers: { "X-Account-ID": "owner", "X-Account-Role": "staff" },
+        body: JSON.stringify({ name: "Desk", publicKey: key }),
+      }),
+    )
+  ).json();
+  const env = { HUB: { idFromName: () => "hub", get: () => hub } };
+  const guest = (suffix, method = "GET", body, token, invite) =>
+    worker.fetch(
+      new Request("https://test/api/rooms/" + room.id + suffix, {
+        method,
+        headers: {
+          "X-Guest-Access": "1",
+          "X-Account-ID": "owner",
+          "X-Account-Role": "admin",
+          ...(token ? { Authorization: "Bearer " + token } : {}),
+          ...(invite ? { "X-Invite": invite } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      }),
+      env,
+    );
+  assert.equal(
+    (await guest("/join", "POST", { name: "Visitor", publicKey: key })).status,
+    403,
+  );
+  const response = await guest(
+    "/join",
+    "POST",
+    { name: "Visitor", publicKey: key },
+    null,
+    room.invite,
+  );
+  assert.equal(response.status, 201);
+  const peer = await response.json();
+  assert.equal(
+    (await guest("/state", "GET", undefined, peer.token)).status,
+    200,
+  );
+  assert.equal(
+    (await guest("/state", "GET", undefined, room.token)).status,
+    403,
+  );
+  assert.equal(
+    (await guest("/diagnostics", "GET", undefined, peer.token)).status,
+    403,
+  );
+  assert.equal(
+    (
+      await guest(
+        "/transfers",
+        "POST",
+        { id: crypto.randomUUID(), to: "desk", name: "file.pdf", size: 8 },
+        peer.token,
+      )
+    ).status,
+    403,
+  );
+  assert.equal((await guest("/state")).status, 401);
+  const staffLog = await hub.fetch(
+    new Request("https://test/api/rooms/" + room.id + "/diagnostics", {
+      headers: {
+        Authorization: "Bearer " + room.token,
+        "X-Account-ID": "owner",
+        "X-Account-Role": "staff",
+      },
+    }),
+  );
+  assert.equal(staffLog.status, 200);
+  assert.ok((await staffLog.json()).some((e) => e.status === 403));
+  database.close();
+});
+
 test("authenticated relay rejects impersonation, supports retry and requires recipient receipt", async () => {
   const { hub, database } = service();
   const api = async (path, method = "GET", body, token, headers = {}) => {
@@ -398,6 +477,7 @@ test("cross-origin API access is blocked and responses have a restrictive policy
 test("blocked RTC cannot endlessly consume free signaling quota", async () => {
   const previous = globalThis.RTCPeerConnection;
   globalThis.RTCPeerConnection = class {
+    addEventListener() {}
     createDataChannel() {
       return { readyState: "connecting" };
     }
@@ -429,6 +509,7 @@ test("ICE that arrives before the offer is retained until remote description exi
   const previous = globalThis.RTCPeerConnection;
   const applied = [];
   globalThis.RTCPeerConnection = class {
+    addEventListener() {}
     async setRemoteDescription(d) {
       this.remoteDescription = d;
     }

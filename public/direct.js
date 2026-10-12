@@ -1,4 +1,5 @@
 // Direct connections are an optional speed boost. HTTPS remains available throughout.
+import { record } from "./diagnostics.js";
 export class Direct {
   constructor(session, send, changed = () => {}) {
     this.session = session;
@@ -22,6 +23,20 @@ export class Direct {
       attempts: (previous?.attempts || 0) + 1,
     };
     this.peers.set(peer, entry);
+    for (const event of [
+      "connectionstatechange",
+      "iceconnectionstatechange",
+      "icegatheringstatechange",
+      "signalingstatechange",
+    ])
+      pc.addEventListener(event, () =>
+        record("webrtc-" + event, {
+          state: pc.connectionState,
+          ice: pc.iceConnectionState,
+          signaling: pc.signalingState,
+          attempts: entry.attempts,
+        }),
+      );
     this.pendingIce.delete(peer + ":" + generation);
     pc.onicecandidate = (e) => {
       if (e.candidate)

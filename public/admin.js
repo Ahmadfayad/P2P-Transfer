@@ -1,5 +1,12 @@
 import { requireLogin, accountRequest } from "./account.js";
 import { parseUsersCSV } from "./user-csv.js";
+import { setDiagnosticSnapshot } from "./diagnostics.js";
+setDiagnosticSnapshot(async () => ({
+  role: "admin",
+  server: await accountRequest("admin/diagnostics").catch(() => ({
+    unavailable: true,
+  })),
+}));
 const $ = (id) => document.getElementById(id);
 let usersToImport = [],
   offset = 0,
@@ -15,7 +22,6 @@ function notify(text) {
   }, 5000);
 }
 const roleDescriptions = {
-  student: "Students join an invited desk and exchange documents.",
   staff: "Staff open desks, approve students and exchange documents.",
   admin:
     "Administrators manage accounts and roles, and can also open desks. Only assign this role to trusted people.",
@@ -26,7 +32,7 @@ $("new-user-role").onchange = (event) => {
 $("add-user-open").onclick = () => {
   $("add-user-form").reset();
   $("add-user-error").textContent = "";
-  $("new-role-description").textContent = roleDescriptions.student;
+  $("new-role-description").textContent = roleDescriptions.staff;
   $("add-user-form").elements.password.type = "password";
   $("new-password-toggle").textContent = "Show password";
   $("new-password-toggle").setAttribute("aria-pressed", "false");
@@ -105,7 +111,13 @@ async function listUsers() {
     const roleCell = node("td"),
       select = node("select");
     select.setAttribute("aria-label", "Role for " + user.email);
-    for (const role of ["student", "staff", "admin"]) {
+    if (!["staff", "admin"].includes(user.role)) {
+      const option = node("option", "Review employee role");
+      option.disabled = true;
+      option.selected = true;
+      select.append(option);
+    }
+    for (const role of ["staff", "admin"]) {
       const option = node("option", role);
       option.value = role;
       option.selected = user.role === role;

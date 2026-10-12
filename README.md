@@ -1,14 +1,14 @@
 # Document Exchange
 
-A private document handover between university staff and approved students. Everyone signs in first. WebRTC provides direct transfers when available; encrypted HTTPS chunks provide recovery when direct routes are blocked. Cloudflare Workers Free hosts transfers; Neon Free stores accounts. No paid TURN provider, domain or subscription is required.
+A private document handover between university staff and approved students. Employees sign in; students enter through a desk QR invitation without accounts. WebRTC provides direct transfers when available; encrypted HTTPS chunks provide recovery when direct routes are blocked. Cloudflare Workers Free hosts transfers; Neon Free stores accounts. No paid TURN provider, domain or subscription is required.
 
 [Open the deployed service](https://uos-document-exchange.uos-document-exchange.workers.dev). Initial administrator credentials are supplied privately and never committed. The [original audit](docs/AUDIT.md) documents the former security and reliability problems.
 
 ## Accounts and administration
 
-Public registration is disabled. Admins manage users; staff open desks; students join invited desks. All transfer APIs require a valid account, and room credentials are bound to that account. An invitation or a copied room token alone cannot access another account's session.
+Public registration is disabled. Admins manage users; staff open desks; students join invited desks. Desk administration requires an employee account. QR guests use a private peer token and must be approved by staff. An invitation cannot grant staff privileges, and copied desk credentials cannot bypass account ownership.
 
-Open **Manage users** (`/admin.html`). Choose **Add user** to create an account manually with a name, email, role and temporary password. The role description explains each permission level. For bulk creation, upload a CSV with exactly `email,name,role,password`, review its preview, then import. Roles are `admin`, `staff` and `student`; passwords contain **6–128 characters**. The server rejects shorter passwords. Import at most 200 rows per file. Quoted names, commas, Unicode and spreadsheet CSV files are supported; duplicate emails and malformed rows are rejected before import begins. The preview does not display passwords.
+Open **Manage users** (`/admin.html`). Choose **Add user** to create an account manually with a name, email, role and temporary password. The role description explains each permission level. For bulk creation, upload a CSV with exactly `email,name,role,password`, review its preview, then import. Employee roles are `admin` and `staff`; students have no login accounts; passwords contain **6–128 characters**. The server rejects shorter passwords. Import at most 200 rows per file. Quoted names, commas, Unicode and spreadsheet CSV files are supported; duplicate emails and malformed rows are rejected before import begins. The preview does not display passwords.
 
 Existing accounts are reported and kept unchanged. An interrupted import reports completed and failed rows; reimporting does not overwrite existing passwords or roles. Admins can change roles, disable non-admin accounts and reset passwords. Disabling and password resets revoke existing sign-ins. Administrator accounts are protected against these controls to prevent accidental lockout. Users can change their own passwords.
 
@@ -16,7 +16,7 @@ Share passwords privately and delete your CSV copy when finished. Account creati
 
 ## Transfers and recovery
 
-Staff sign in, enter a desk name and share the generated QR code. Students open that invitation and sign in. Staff approve each connection before files can be exchanged. Keep both pages open until **Received ✓**: the receiver has verified and saved the complete document. This does not mean the person downloaded or read it. Use **Save a copy** before clearing browser data or removing a file.
+Staff sign in, enter a desk name and share the generated QR code. Students open that invitation and enter their name or student ID without signing in. Staff approve each connection before files can be exchanged. Keep both pages open until **Received ✓**: the receiver has verified and saved the complete document. This does not mean the person downloaded or read it. Use **Save a copy** before clearing browser data or removing a file.
 
 Use separate devices or browser profiles for a desk and its student. Tabs retain their own role on refresh. A staff tab may visit another desk; it cannot join its own desk and mix sender/receiver storage.
 
@@ -31,6 +31,12 @@ Better Auth 1.7.7 stores users, hashed credentials and sessions in Neon's Postgr
 The QR fragment pins the desk public-key fingerprint and carries an invitation secret, never the private desk token. ECDH-derived AES-GCM keys encrypt document chunks in the browsers, binding room, participants, filename, size and chunk position. Cloudflare holds metadata and bounded encrypted chunks; it does not receive plaintext files or browser encryption keys. Compromised site JavaScript remains a threat.
 
 PDF and image previews use fixed canonical MIME types. HTML and SVG are not embedded as executable documents. DOCX is download-only and checked as a ZIP container. This is not an antivirus or content scanner. The QR library is bundled locally with its MIT notices; no external script/CSS CDN is required.
+
+## Connection diagnostics and work PC
+
+Expand **Connection help & system log** and select the affected network before downloading the JSON. Export from both sender and receiver when possible. The browser retains the last 1,200 events across refreshes in that tab; server records retain at most 2,000 entries for up to 24 hours. Logs include HTTP timing/status/correlation IDs, retries, network changes, WebRTC state and transfer offsets. Staff can export their room server records; admins can export recent system errors. Passwords, invitation keys, document contents and filenames are excluded. Export promptly after the problem; closing the tab can clear its local log.
+
+See [the work-PC handoff](docs/PROJECT-HANDOFF.md) to continue from the same GitHub branch. Local project folders are not copied between computers by conversation sync.
 
 ## Run locally
 

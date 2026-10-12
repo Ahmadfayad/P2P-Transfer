@@ -4,19 +4,84 @@ import { Exchange, request, finishFile } from "./transfer.js";
 import { csvCell, chunkCount, fileType } from "./protocol.js";
 import QRCode from "./vendor/qrcode.js";
 import { requireLogin } from "./account.js";
+import { record, setDiagnosticSnapshot } from "./diagnostics.js";
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
-const invitation = fragment.has("room")
+let invitation = fragment.has("room")
   ? {
       room: fragment.get("room"),
       invite: fragment.get("invite"),
       fingerprint: fragment.get("key"),
     }
   : null;
-if (invitation) history.replaceState(null, "", location.pathname);
+if (invitation) {
+  sessionStorage.setItem("desk-invitation", JSON.stringify(invitation));
+  history.replaceState(null, "", "/student");
+} else if (location.pathname === "/student") {
+  try {
+    invitation = JSON.parse(sessionStorage.getItem("desk-invitation"));
+  } catch {}
+}
+const guest = location.pathname === "/student";
+const sessionKey = guest ? "guest-session" : "exchange-session";
 let exchange, session, lastState, timer, toastTimer, previewURL;
 const urls = new Map();
+setDiagnosticSnapshot(async () => ({
+  role: session?.self === "desk" ? "staff" : guest ? "guest" : "signed-out",
+  room: session?.room,
+  expires: session?.expires,
+  stopped: exchange?.stopped,
+  failures: exchange?.failures || 0,
+  lastProgress: exchange?.lastProgress,
+  peers: lastState?.peers.map(({ id, state, seen }) => ({ id, state, seen })),
+  transfers: lastState?.transfers.map(
+    ({ id, size, state, next, received }) => ({
+      id,
+      size,
+      state,
+      next,
+      received,
+    }),
+  ),
+  server:
+    session?.self === "desk" && !exchange?.stopped
+      ? await exchange
+          .api("/diagnostics", { signal: AbortSignal.timeout(8000) })
+          .then((r) => r.json())
+          .catch(() => ({ unavailable: true }))
+      : {
+          available: false,
+          reason:
+            "Server records are exported by the staff desk; this log includes this browser's requests.",
+        },
+  direct: exchange
+    ? await Promise.all(
+        [...exchange.direct.peers.values()].map(
+          async ({ pc, channel, attempts }) => {
+            const stats = await pc.getStats().catch(() => new Map());
+            const pair = [...stats.values()].find(
+              (s) =>
+                s.type === "candidate-pair" &&
+                s.state === "succeeded" &&
+                s.nominated,
+            );
+            const candidate = pair && stats.get(pair.localCandidateId);
+            return {
+              state: pc.connectionState,
+              ice: pc.iceConnectionState,
+              channel: channel?.readyState,
+              attempts,
+              candidateType: candidate?.candidateType,
+              protocol: candidate?.protocol,
+              roundTripTime: pair?.currentRoundTripTime,
+            };
+          },
+        ),
+      )
+    : [],
+}));
 function message(text) {
+  record("notice");
   $("message").textContent = text;
   $("message").hidden = false;
   clearTimeout(toastTimer);
@@ -219,6 +284,7 @@ function renderState(state) {
   if (state) lastState = state;
   if (!lastState) return;
   const desk = session.self === "desk";
+  if (desk) localStorage.setItem("owned-desk-room", session.room);
   $("workspace").classList.toggle("student", !desk);
   const own = lastState.peers.find((p) => p.id === session.self);
   const approved = desk || own?.state === "approved";
@@ -348,6 +414,12 @@ async function poll(instance) {
     $("network").classList.add("error");
     instance.failures = (instance.failures || 0) + 1;
     delay = Math.min(30000, 3000 * 2 ** Math.min(instance.failures - 1, 4));
+    record("connection-retry", {
+      status: error.status,
+      duration: delay,
+      attempts: instance.failures,
+      message: error.name,
+    });
     if ([401, 410].includes(error.status)) {
       instance.stop();
       instance.polling = false;
@@ -375,8 +447,8 @@ async function begin(saved) {
   session = saved;
   lastState = null;
   await db.put("sessions", saved);
-  sessionStorage.setItem("exchange-session", saved.id);
-  localStorage.setItem("exchange-session", saved.id);
+  sessionStorage.setItem(sessionKey, saved.id);
+  localStorage.setItem(sessionKey, saved.id);
   exchange = new Exchange(session, (state) => {
     if (exchange?.session === saved) renderState(state);
   });
@@ -399,6 +471,7 @@ async function begin(saved) {
   $("recipient-label").hidden = !desk;
   if (desk) {
     const link = new URL(location.href);
+    link.pathname = "/student";
     link.hash = new URLSearchParams({
       room: session.room,
       invite: session.invite,
@@ -454,6 +527,7 @@ $("join-form").onsubmit = (event) => {
         "This invitation is incomplete. Ask the desk for a new link.",
       );
     if (
+      localStorage.getItem("owned-desk-room") === invitation.room ||
       (await db.all("sessions")).some(
         (s) =>
           s.room === invitation.room &&
@@ -472,7 +546,7 @@ $("join-form").onsubmit = (event) => {
           name: $("student-name").value.trim(),
           publicKey: keys.publicKey,
         },
-        headers: { "X-Invite": invitation.invite },
+        headers: { "X-Invite": invitation.invite, "X-Guest-Access": "1" },
       })
     ).json();
     if ((await fingerprint(result.publicKey)) !== invitation.fingerprint)
@@ -482,6 +556,7 @@ $("join-form").onsubmit = (event) => {
     await begin({
       id: result.id,
       room: invitation.room,
+      guest: true,
       self: result.id,
       name: result.name,
       token: result.token,
@@ -508,14 +583,14 @@ $("leave").onclick = async () => {
       await exchange.api("", { method: "DELETE" });
     exchange.stop();
     clearTimeout(timer);
-    localStorage.removeItem("exchange-session");
-    sessionStorage.removeItem("exchange-session");
+    localStorage.removeItem(sessionKey);
+    sessionStorage.removeItem(sessionKey);
     session = null;
     lastState = null;
     $("workspace").hidden = true;
     $("welcome").hidden = false;
-    $("desk-form").hidden = false;
-    $("join-form").hidden = true;
+    $("desk-form").hidden = guest;
+    $("join-form").hidden = !guest;
     await renderFiles();
   } catch (e) {
     message(e.message);
@@ -587,6 +662,37 @@ window.addEventListener("online", () => {
 });
 async function init() {
   try {
+    if (guest) {
+      document.body.classList.add("student-page");
+      $("welcome").firstElementChild.classList.add("student-hero");
+      $("welcome").querySelector("h1").innerHTML =
+        "Your desk.<br>Your documents.";
+      $("welcome").querySelector(".eyebrow").textContent =
+        "Student document portal";
+      $("welcome").querySelector(".features").innerHTML =
+        "<span>01 · Connect</span><span>02 · Get approved</span><span>03 · Exchange files</span>";
+      $("login").hidden = true;
+      $("welcome").hidden = false;
+      $("desk-form").hidden = true;
+      $("join-form").hidden = !invitation;
+      $("student-start").hidden = Boolean(invitation);
+      if (!invitation) return;
+      db.useAccount("guest:" + invitation.room);
+      const saved = await db.get(
+        "sessions",
+        sessionStorage.getItem(sessionKey) || "",
+      );
+      if (
+        saved?.guest &&
+        saved.room === invitation.room &&
+        saved.expires > Date.now()
+      )
+        await begin(saved);
+      await renderFiles();
+      await request("/health");
+      if (!exchange) $("network").textContent = "Ready to connect";
+      return;
+    }
     const user = await requireLogin();
     db.useAccount(user.id);
     $("legacy-recovery").hidden = !(await db.legacyAvailable());
@@ -597,8 +703,8 @@ async function init() {
         $("legacy-recovery").hidden = true;
         const saved = await db.get(
           "sessions",
-          sessionStorage.getItem("exchange-session") ||
-            localStorage.getItem("exchange-session") ||
+          sessionStorage.getItem(sessionKey) ||
+            localStorage.getItem(sessionKey) ||
             "",
         );
         if (
@@ -626,8 +732,8 @@ async function init() {
       );
     const saved = await db.get(
       "sessions",
-      sessionStorage.getItem("exchange-session") ||
-        localStorage.getItem("exchange-session") ||
+      sessionStorage.getItem(sessionKey) ||
+        localStorage.getItem(sessionKey) ||
         "",
     );
     if (

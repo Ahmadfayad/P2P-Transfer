@@ -75,7 +75,7 @@
           <div class="overview-item">
             <span class="overview-icon violet" aria-hidden="true">↗</span>
             <div>
-              <strong>3 roles</strong><span>Admin · Staff · Student</span>
+              <strong>2 employee roles</strong><span>Admin · Staff</span>
             </div>
           </div>
           <div class="overview-item">
@@ -110,8 +110,8 @@
           </div>
           <p>
             Upload a CSV with <strong>email,name,role,password</strong>. Roles:
-            admin, staff or student. Passwords: 6–128 characters. Maximum 200
-            rows. Existing accounts are reported and kept unchanged.
+            admin or staff. Passwords: 6–128 characters. Maximum 200 rows.
+            Existing accounts are reported and kept unchanged.
           </p>
           <p>
             <a href="/users-template.csv" download>Download CSV template</a>
@@ -225,12 +225,11 @@
         /></label>
         <label for="new-user-role">Account role</label
         ><select name="role" id="new-user-role">
-          <option value="student">Student</option>
           <option value="staff">Staff</option>
           <option value="admin">Administrator</option>
         </select>
         <p id="new-role-description" class="role-description">
-          Students join an invited desk and exchange documents.
+          Staff open desks, approve students and exchange documents.
         </p>
         <label
           >Temporary password<input

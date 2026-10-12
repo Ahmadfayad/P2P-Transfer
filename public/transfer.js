@@ -10,22 +10,23 @@ import {
 import * as db from "./storage.js";
 import { shared, encrypt, decrypt, fingerprint } from "./crypto.js";
 import { Direct } from "./direct.js";
+import { trackedFetch, record } from "./diagnostics.js";
 
 export async function request(
   path,
-  { method = "GET", body, token, headers = {} } = {},
+  { method = "GET", body, token, headers = {}, signal } = {},
 ) {
   if (token) headers.Authorization = "Bearer " + token;
   if (body && !(body instanceof Uint8Array)) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(body);
   }
-  const response = await fetch("/api" + path, {
+  const response = await trackedFetch("/api" + path, {
     method,
     body,
     headers,
     cache: "no-store",
-    signal: AbortSignal.timeout(20000),
+    signal: signal || AbortSignal.timeout(20000),
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
@@ -92,6 +93,10 @@ export class Exchange {
     return request("/rooms/" + this.session.room + path, {
       ...options,
       token: this.session.token,
+      headers: {
+        ...options.headers,
+        ...(this.session.guest ? { "X-Guest-Access": "1" } : {}),
+      },
     });
   }
   async key(peer, state) {
@@ -225,6 +230,11 @@ export class Exchange {
     const direct =
       previous?.index !== t.next &&
       this.direct.upload(t.to, t.id, t.next, bytes);
+    record("send-chunk", {
+      index: t.next,
+      size: bytes.byteLength,
+      state: direct ? "direct" : "https",
+    });
     if (!direct)
       await this.api("/transfers/" + t.id + "/chunks/" + t.next, {
         method: "PUT",

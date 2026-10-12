@@ -67,8 +67,10 @@ export function parseUsersCSV(text) {
       /[\x00-\x1f\x7f]/.test(user.name)
     )
       throw new Error(`Row ${i + 2}: invalid name.`);
-    if (!["admin", "staff", "student"].includes(user.role))
-      throw new Error(`Row ${i + 2}: role must be admin, staff or student.`);
+    if (!["admin", "staff"].includes(user.role))
+      throw new Error(
+        `Row ${i + 2}: employee role must be admin or staff. Students use QR invitations without accounts.`,
+      );
     if (user.password.length < 6 || user.password.length > 128)
       throw new Error(
         `Row ${i + 2}: password must contain 6 to 128 characters.`,

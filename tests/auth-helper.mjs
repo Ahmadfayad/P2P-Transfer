@@ -23,9 +23,10 @@ export function testHeaders(base) {
 }
 const fixtureUsers = [];
 for (const [key, role] of [
+  ["admin", "admin"],
   ["staff", "staff"],
   ["otherStaff", "staff"],
-  ["student", "student"],
+  ["student", "staff"],
 ]) {
   const old = await context.internalAdapter.findUserByEmail(
     `exchange-test-${key.toLowerCase()}@example.invalid`,
@@ -46,6 +47,12 @@ export async function cleanupAuthFixtures(additionalIds = []) {
   for (const id of [...fixtureUsers, ...additionalIds]) {
     await context.internalAdapter.deleteUser(id);
   }
+}
+export async function makeLegacyStudentFixture() {
+  const result = await context.internalAdapter.findUserByEmail(
+    credentials.student.email,
+  );
+  await context.internalAdapter.updateUser(result.user.id, { role: "student" });
 }
 export async function login(page, base, key = "staff") {
   const response = await page.request.post(base + "/api/auth/sign-in/email", {

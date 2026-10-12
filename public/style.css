@@ -995,3 +995,70 @@ footer {
     scroll-behavior: auto !important;
   }
 }
+/* Student portal shares the administration palette and card treatments. */
+.student-page .student-hero,
+.student-page .page-heading {
+  padding: 34px;
+  border-radius: 24px;
+  color: white;
+  background:
+    radial-gradient(circle at 92% 10%, #6f72e080, transparent 38%),
+    linear-gradient(115deg, #172b55, #354381 65%, #4b4194);
+  box-shadow: 0 18px 40px #1b32621c;
+}
+.student-page .student-hero .eyebrow,
+.student-page .page-heading .eyebrow {
+  color: #a9dcec;
+}
+.student-page .student-hero .intro,
+.student-page .page-heading p {
+  color: #d4def4;
+}
+.student-page .student-hero .features {
+  display: grid;
+  gap: 12px;
+  margin-top: 28px;
+}
+.student-page .student-hero .features span {
+  padding: 12px 16px;
+  border: 1px solid #ffffff30;
+  border-radius: 12px;
+  background: #ffffff0d;
+  color: white;
+}
+.student-page #entry {
+  border-top: 5px solid #5c63ce;
+  box-shadow: 0 12px 35px #213b6610;
+}
+.student-page #workspace .page-heading {
+  margin-bottom: 24px;
+}
+.student-page #workspace .card {
+  border-color: #dce3f2;
+  box-shadow: 0 8px 24px #20325b09;
+}
+.student-page #workspace .page-heading h1 {
+  color: white;
+}
+.student-page #workspace .page-heading button {
+  background: white;
+  color: #253866;
+}
+.diagnostics {
+  margin: 28px 0;
+  font-size: 14px;
+}
+.diagnostics summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #354381;
+}
+.diagnostics select {
+  max-width: 360px;
+}
+@media (max-width: 600px) {
+  .student-page .student-hero,
+  .student-page .page-heading {
+    padding: 24px;
+  }
+}

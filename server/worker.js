@@ -85,6 +85,10 @@ async function readBody(request, limit) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const requestId = crypto.randomUUID();
+    const incoming = new Headers(request.headers);
+    incoming.set("X-Request-ID", requestId);
+    request = new Request(request, { headers: incoming });
     let response;
     if (url.pathname.startsWith("/api/")) {
       const origin = request.headers.get("Origin");
@@ -101,87 +105,122 @@ export default {
         response = json({ ok: true, protocol: 3 });
       else {
         try {
-          const auth = createAuth(env);
-          if (url.pathname.startsWith("/api/auth/")) {
-            check(
-              publicAuthPaths.has(url.pathname.slice(9)) &&
-                ["GET", "POST"].includes(request.method),
-              404,
-              "Page not found.",
+          if (
+            request.headers.get("X-Guest-Access") === "1" &&
+            /^\/api\/rooms\/[0-9a-f-]{36}\//.test(url.pathname)
+          ) {
+            const headers = new Headers(request.headers);
+            for (const name of [
+              "X-Account-ID",
+              "X-Account-Role",
+              "X-Account-Name",
+              "X-Setup-Key",
+            ])
+              headers.delete(name);
+            headers.set("X-Access-Mode", "guest");
+            response = await env.HUB.get(env.HUB.idFromName("exchange")).fetch(
+              new Request(request, { headers }),
             );
-            if (request.method === "POST") {
-              const body = await readBody(request, 8192);
-              if (url.pathname === "/api/auth/sign-in/email") {
-                let credentials;
-                try {
-                  credentials = JSON.parse(new TextDecoder().decode(body));
-                } catch {
-                  throw new HttpError(400, "Invalid request.");
-                }
-                check(
-                  typeof credentials?.email === "string" &&
-                    credentials.email.length <= 254,
-                  400,
-                  "Enter your email.",
-                );
-                const limit = await env.HUB.get(
-                  env.HUB.idFromName("exchange"),
-                ).fetch(
-                  new Request("https://internal/login-limit", {
-                    method: "POST",
-                    body: JSON.stringify({
-                      email: credentials.email.trim().toLowerCase(),
-                    }),
-                  }),
-                );
-                if (!limit.ok)
-                  throw new HttpError(
-                    limit.status,
-                    "Too many sign-in attempts for this account. Please wait a minute.",
-                  );
-              }
-              request = new Request(request.url, {
-                method: request.method,
-                headers: request.headers,
-                body,
-              });
-            }
-            response = await auth.handler(request);
           } else {
-            const account = await auth.api.getSession({
-              headers: request.headers,
-            });
-            check(
-              account?.user &&
-                !account.user.banned &&
-                permittedRole(account.user.role),
-              401,
-              "Please sign in.",
-            );
-            if (url.pathname.startsWith("/api/admin/"))
-              response = await administration(request, auth, account.user);
-            else {
-              if (url.pathname === "/api/rooms" && request.method === "POST")
-                check(
-                  ["admin", "staff"].includes(account.user.role),
-                  403,
-                  "Only staff can open a desk.",
-                );
-              const headers = new Headers(request.headers);
-              headers.set("X-Account-ID", account.user.id);
-              headers.set("X-Account-Role", account.user.role);
-              headers.set(
-                "X-Account-Name",
-                encodeURIComponent(account.user.name),
+            const auth = createAuth(env);
+            if (url.pathname.startsWith("/api/auth/")) {
+              check(
+                publicAuthPaths.has(url.pathname.slice(9)) &&
+                  ["GET", "POST"].includes(request.method),
+                404,
+                "Page not found.",
               );
-              headers.delete("X-Setup-Key");
-              response = await env.HUB.get(
-                env.HUB.idFromName("exchange"),
-              ).fetch(new Request(request, { headers }));
+              if (request.method === "POST") {
+                const body = await readBody(request, 8192);
+                if (url.pathname === "/api/auth/sign-in/email") {
+                  let credentials;
+                  try {
+                    credentials = JSON.parse(new TextDecoder().decode(body));
+                  } catch {
+                    throw new HttpError(400, "Invalid request.");
+                  }
+                  check(
+                    typeof credentials?.email === "string" &&
+                      credentials.email.length <= 254,
+                    400,
+                    "Enter your email.",
+                  );
+                  const limit = await env.HUB.get(
+                    env.HUB.idFromName("exchange"),
+                  ).fetch(
+                    new Request("https://internal/login-limit", {
+                      method: "POST",
+                      body: JSON.stringify({
+                        email: credentials.email.trim().toLowerCase(),
+                      }),
+                    }),
+                  );
+                  if (!limit.ok)
+                    throw new HttpError(
+                      limit.status,
+                      "Too many sign-in attempts for this account. Please wait a minute.",
+                    );
+                }
+                request = new Request(request.url, {
+                  method: request.method,
+                  headers: request.headers,
+                  body,
+                });
+              }
+              response = await auth.handler(request);
+            } else {
+              const account = await auth.api.getSession({
+                headers: request.headers,
+              });
+              check(
+                account?.user &&
+                  !account.user.banned &&
+                  permittedRole(account.user.role),
+                401,
+                "Please sign in.",
+              );
+              if (
+                url.pathname === "/api/admin/diagnostics" &&
+                request.method === "GET"
+              ) {
+                check(
+                  account.user.role === "admin",
+                  403,
+                  "Administrator access required.",
+                );
+                response = await env.HUB.get(
+                  env.HUB.idFromName("exchange"),
+                ).fetch(new Request("https://internal/system-log"));
+              } else if (url.pathname.startsWith("/api/admin/"))
+                response = await administration(request, auth, account.user);
+              else {
+                if (url.pathname === "/api/rooms" && request.method === "POST")
+                  check(
+                    ["admin", "staff"].includes(account.user.role),
+                    403,
+                    "Only staff can open a desk.",
+                  );
+                const headers = new Headers(request.headers);
+                headers.delete("X-Access-Mode");
+                headers.set("X-Account-ID", account.user.id);
+                headers.set("X-Account-Role", account.user.role);
+                headers.set(
+                  "X-Account-Name",
+                  encodeURIComponent(account.user.name),
+                );
+                headers.delete("X-Setup-Key");
+                response = await env.HUB.get(
+                  env.HUB.idFromName("exchange"),
+                ).fetch(new Request(request, { headers }));
+              }
             }
           }
         } catch (error) {
-          const status = error.status || error.statusCode || 503;
+          const status = Number.isInteger(error.status)
+            ? error.status
+            : Number.isInteger(error.statusCode)
+              ? error.statusCode
+              : 503;
           response = json(
             {
               error:
@@ -193,8 +232,34 @@ export default {
           );
         }
       }
-    } else response = await env.ASSETS.fetch(request);
+    } else
+      response = await env.ASSETS.fetch(
+        url.pathname === "/student"
+          ? new Request(new URL("/", url), request)
+          : request,
+      );
     const headers = new Headers(response.headers);
+    headers.set("X-Request-ID", requestId);
+    headers.set("X-App-Version", "guest-diagnostics-v1");
+    if (
+      url.pathname.startsWith("/api/") &&
+      response.status >= 400 &&
+      !url.pathname.startsWith("/api/rooms/")
+    ) {
+      await env.HUB?.get(env.HUB.idFromName("exchange"))
+        .fetch(
+          new Request("https://internal/system-event", {
+            method: "POST",
+            body: JSON.stringify({
+              requestId,
+              route: url.pathname,
+              method: request.method,
+              status: response.status,
+            }),
+          }),
+        )
+        .catch(() => {});
+    }
     headers.set("X-Content-Type-Options", "nosniff");
     headers.set("Referrer-Policy", "no-referrer");
     headers.set(
@@ -332,6 +397,7 @@ export class TransferHub {
       CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, payload TEXT NOT NULL, created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS limits (id TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS account_bindings (room TEXT NOT NULL, peer TEXT NOT NULL, account TEXT NOT NULL, PRIMARY KEY(room, peer));
+      CREATE TABLE IF NOT EXISTS diagnostics (id INTEGER PRIMARY KEY AUTOINCREMENT, time INTEGER NOT NULL, room TEXT, request_id TEXT, method TEXT, route TEXT, status INTEGER, duration INTEGER);
       CREATE INDEX IF NOT EXISTS peers_room ON peers(room);
       CREATE INDEX IF NOT EXISTS peers_token ON peers(room, token);
       CREATE INDEX IF NOT EXISTS transfers_room ON transfers(room);
@@ -413,10 +479,12 @@ export class TransferHub {
     return t;
   }
   async fetch(request) {
+    const started = Date.now();
+    let response;
     try {
-      return await this.handle(request);
+      response = await this.handle(request);
     } catch (error) {
-      return json(
+      response = json(
         {
           error: error.status
             ? error.message
@@ -425,10 +493,42 @@ export class TransferHub {
         error.status || 500,
       );
     }
+    const path = new URL(request.url).pathname;
+    if (
+      path.startsWith("/api/rooms/") &&
+      !path.endsWith("/diagnostics") &&
+      (response.status >= 400 ||
+        (request.method !== "GET" &&
+          !path.includes("/chunks/") &&
+          !path.endsWith("/ack") &&
+          !path.endsWith("/events")))
+    ) {
+      this.sql.exec(
+        "INSERT INTO diagnostics (time, room, request_id, method, route, status, duration) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        Date.now(),
+        path.split("/")[3],
+        request.headers.get("X-Request-ID"),
+        request.method,
+        path,
+        response.status,
+        Date.now() - started,
+      );
+      this.sql.exec(
+        "DELETE FROM diagnostics WHERE time < ? OR id <= (SELECT max(id) - 2000 FROM diagnostics)",
+        Date.now() - 86400000,
+      );
+    }
+    return response;
   }
   async handle(request) {
     const url = new URL(request.url);
     const method = request.method;
+    if (url.pathname === "/system-log" && method === "GET")
+      return json(
+        this.rows(
+          "SELECT time, room, request_id, method, route, status, duration FROM diagnostics ORDER BY id DESC LIMIT 300",
+        ),
+      );
     const segments = url.pathname.split("/").filter(Boolean);
     const chunkRequest = method === "PUT" && segments[5] === "chunks";
     const bytes = ["POST", "PUT", "DELETE"].includes(method)
@@ -446,6 +546,22 @@ export class TransferHub {
         400,
         "Invalid request.",
       );
+    }
+    if (url.pathname === "/system-event" && method === "POST") {
+      this.sql.exec(
+        "INSERT INTO diagnostics (time, request_id, method, route, status, duration) VALUES (?, ?, ?, ?, ?, ?)",
+        Date.now(),
+        body.requestId,
+        body.method,
+        body.route,
+        body.status,
+        0,
+      );
+      this.sql.exec(
+        "DELETE FROM diagnostics WHERE time < ? OR id <= (SELECT max(id) - 2000 FROM diagnostics)",
+        Date.now() - 86400000,
+      );
+      return json({ ok: true });
     }
     if (method === "POST" && url.pathname === "/login-limit") {
       check(
@@ -525,7 +641,12 @@ export class TransferHub {
     if (method === "POST" && segments[3] === "join" && segments.length === 4) {
       if (request.headers.has("X-Account-Name"))
         body.name = decodeURIComponent(request.headers.get("X-Account-Name"));
-      check(request.headers.get("X-Account-ID"), 401, "Please sign in.");
+      check(
+        request.headers.get("X-Account-ID") ||
+          request.headers.get("X-Access-Mode") === "guest",
+        401,
+        "Please sign in.",
+      );
       this.rate(
         "join:" +
           roomId +
@@ -569,7 +690,9 @@ export class TransferHub {
         "INSERT INTO account_bindings VALUES (?, ?, ?)",
         roomId,
         id,
-        request.headers.get("X-Account-ID"),
+        request.headers.get("X-Access-Mode") === "guest"
+          ? "guest:" + id
+          : request.headers.get("X-Account-ID"),
       );
       return json(
         {
@@ -622,10 +745,30 @@ export class TransferHub {
           "SELECT account FROM account_bindings WHERE room = ? AND peer = ?",
           roomId,
           who,
-        )?.account) === request.headers.get("X-Account-ID"),
+        )?.account) ===
+        (request.headers.get("X-Access-Mode") === "guest" && who !== "desk"
+          ? "guest:" + who
+          : request.headers.get("X-Account-ID")),
       403,
       "This desk session belongs to another account. Open a new session.",
     );
+    if (
+      method === "GET" &&
+      segments[3] === "diagnostics" &&
+      segments.length === 4
+    ) {
+      check(
+        who === "desk",
+        403,
+        "Only the desk owner can export server records.",
+      );
+      return json(
+        this.rows(
+          "SELECT time, request_id, method, route, status, duration FROM diagnostics WHERE room = ? ORDER BY id DESC LIMIT 300",
+          roomId,
+        ),
+      );
+    }
     if (method === "GET" && segments[3] === "state" && segments.length === 4) {
       const since = Number(url.searchParams.get("since") || 0);
       check(

@@ -15,6 +15,7 @@ test("CSV import validates the entire file before creating accounts", () => {
   for (const row of [
     "bad,name,staff,123456",
     "a@example.com,name,owner,123456",
+    "a@example.com,name,student,123456",
     "a@example.com,name,staff,12345",
     'a@example.com,"unclosed,staff,123456',
     'a@example.com,"closed"junk,staff,123456',
@@ -24,7 +25,7 @@ test("CSV import validates the entire file before creating accounts", () => {
   assert.throws(() =>
     parseUsersCSV(
       header +
-        "a@example.com,Name,staff,123456\nA@example.com,Name,student,123456",
+        "a@example.com,Name,staff,123456\nA@example.com,Name,staff,123456",
     ),
   );
   assert.throws(() =>
@@ -32,7 +33,7 @@ test("CSV import validates the entire file before creating accounts", () => {
       header +
         Array.from(
           { length: 201 },
-          (_, i) => `a${i}@example.com,Name,student,123456`,
+          (_, i) => `a${i}@example.com,Name,staff,123456`,
         ).join("\n"),
     ),
   );
@@ -41,4 +42,5 @@ test("only explicit account routes and roles are allowed", () => {
   assert.equal(publicAuthPaths.has("/sign-up/email"), false);
   assert.equal(publicAuthPaths.has("/admin/create-user"), false);
   assert.equal(permittedRole("admin,student"), false);
+  assert.equal(permittedRole("student"), false);
 });

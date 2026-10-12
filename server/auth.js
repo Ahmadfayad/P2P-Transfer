@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { admin } from "better-auth/plugins/admin";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { neon } from "@neondatabase/serverless";
@@ -60,6 +61,22 @@ export function createAuth(env) {
       },
     },
     session: { expiresIn: 8 * 60 * 60, cookieCache: { enabled: false } },
+    databaseHooks: {
+      session: {
+        create: {
+          before: async (session) => {
+            const [user] =
+              await sql`SELECT role FROM "user" WHERE id = ${session.userId}`;
+            if (!permittedRole(user?.role))
+              throw new APIError("FORBIDDEN", {
+                message:
+                  "Employee accounts only. Students must use the desk QR code.",
+              });
+            return { data: session };
+          },
+        },
+      },
+    },
     rateLimit: {
       enabled: true,
       storage: "database",
@@ -70,8 +87,8 @@ export function createAuth(env) {
     advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } },
     plugins: [
       admin({
-        defaultRole: "student",
-        roles: { admin: adminAc, staff: userAc, student: userAc },
+        defaultRole: "staff",
+        roles: { admin: adminAc, staff: userAc },
       }),
     ],
   });
@@ -80,7 +97,7 @@ export function createAuth(env) {
 }
 
 export function permittedRole(role) {
-  return ["admin", "staff", "student"].includes(role);
+  return ["admin", "staff"].includes(role);
 }
 export const publicAuthPaths = new Set([
   "/sign-in/email",
