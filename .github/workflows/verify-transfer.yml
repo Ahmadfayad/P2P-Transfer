@@ -33,3 +33,10 @@ jobs:
       - run: npm run test:reliability
       - name: Verify Cloudflare Worker bundle without deployment
         run: npx wrangler deploy --dry-run --outdir worker-build
+      - name: Retain verified bundle briefly for deployment
+        uses: actions/upload-artifact@v7
+        with:
+          name: verified-worker-bundle
+          path: worker-build/
+          retention-days: 1
+          if-no-files-found: error
