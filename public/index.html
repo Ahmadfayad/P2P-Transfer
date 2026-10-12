@@ -11,7 +11,8 @@
   <body>
     <header>
       <a class="brand" href="/"
-        >↗ <span>Document Exchange<small>University of Sharjah</small></span></a
+        >↗
+        <span>Document Exchange<small>University of Sharjah</small></span></a
       ><span class="pill" id="network">Checking connection</span>
     </header>
     <nav id="account-tools" hidden aria-label="Account">
@@ -24,7 +25,7 @@
       ><span id="account-error" role="status"></span>
     </nav>
     <main>
-      <section id="login" class="card login-card">
+      <section id="login" class="card login-card" hidden>
         <span class="eyebrow">Document Exchange</span>
         <h1>Sign in</h1>
         <p>Use the account provided by your administrator.</p>
@@ -82,24 +83,6 @@
             Open the invitation link or scan the QR code from your desk to start
             a transfer.
           </p>
-          <form id="join-form" hidden>
-            <span class="eyebrow">For students</span>
-            <h2>Connect to the desk</h2>
-            <p>Your desk will approve you before any files are sent.</p>
-            <label
-              >Your name or student ID<input
-                id="student-name"
-                required
-                maxlength="64"
-                autocomplete="off"
-                placeholder="Enter your name or ID"
-            /></label>
-            <p class="small">
-              This label helps staff identify you. It does not verify your
-              identity.
-            </p>
-            <button type="submit">Request connection <span>↗</span></button>
-          </form>
         </div>
       </section>
       <section id="workspace" hidden>
@@ -199,6 +182,63 @@
       </section>
       <div id="message" role="status" aria-live="polite" hidden></div>
     </main>
+    <dialog
+      id="student-gate"
+      class="connection-dialog"
+      aria-labelledby="student-gate-title"
+    >
+      <span class="eyebrow">Student document portal</span>
+      <h2 id="student-gate-title">Connect to the desk</h2>
+      <form id="join-form" hidden>
+        <p>Your desk will approve you before any files are sent.</p>
+        <label
+          >Your name or student ID<input
+            id="student-name"
+            autofocus
+            required
+            maxlength="64"
+            autocomplete="off"
+            placeholder="Enter your name or ID"
+        /></label>
+        <p class="small">
+          This label helps staff identify you. It does not verify your identity.
+        </p>
+        <button type="submit">Request connection <span>↗</span></button>
+      </form>
+      <div id="student-phase" role="status" aria-live="polite" hidden>
+        <p id="student-identity" class="connection-identity"></p>
+        <p id="student-phase-text"></p>
+        <button id="student-cancel" type="button" class="secondary" hidden>
+          Cancel request
+        </button>
+        <button id="student-saved" type="button" class="secondary" hidden>
+          View saved files
+        </button>
+      </div>
+      <p id="student-error" role="alert"></p>
+    </dialog>
+    <dialog
+      id="approval-dialog"
+      class="connection-dialog"
+      aria-labelledby="approval-title"
+    >
+      <span class="eyebrow">New student request</span>
+      <h2 id="approval-title">A student wants to connect</h2>
+      <p>Name or student ID</p>
+      <p id="approval-identity" class="connection-identity"></p>
+      <p class="small">
+        This information is self-reported. Check it with the person at your desk
+        before approving.
+      </p>
+      <p id="approval-count" class="small"></p>
+      <div class="actions">
+        <button id="approval-approve" type="button">Approve</button>
+        <button id="approval-reject" type="button" class="secondary">
+          Reject
+        </button>
+      </div>
+      <p id="approval-error" role="alert"></p>
+    </dialog>
     <dialog id="password-dialog">
       <h2>Change password</h2>
       <form id="password-form">

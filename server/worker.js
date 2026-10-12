@@ -483,6 +483,26 @@ export class TransferHub {
     );
     return t;
   }
+  declinePeer(room, peer, reason) {
+    this.sql.exec(
+      "UPDATE peers SET state = 'declined' WHERE room = ? AND id = ?",
+      room,
+      peer,
+    );
+    this.sql.exec(
+      "DELETE FROM chunks WHERE transfer IN (SELECT id FROM transfers WHERE room = ? AND (sender = ? OR recipient = ?) AND state != 'received')",
+      room,
+      peer,
+      peer,
+    );
+    this.sql.exec(
+      "UPDATE transfers SET state = 'rejected', error = ? WHERE room = ? AND (sender = ? OR recipient = ?) AND state != 'received'",
+      reason,
+      room,
+      peer,
+      peer,
+    );
+  }
   async fetch(request) {
     const started = Date.now();
     let response;
@@ -859,6 +879,11 @@ export class TransferHub {
         })),
       });
     }
+    if (method === "POST" && segments[3] === "leave" && segments.length === 4) {
+      check(who !== "desk", 403, "Only a visitor can leave this connection.");
+      this.declinePeer(roomId, who, "The visitor left this connection.");
+      return json({ left: true });
+    }
     if (method === "DELETE" && segments.length === 3) {
       check(who === "desk", 403, "Only the desk can end a session.");
       this.sql.exec("UPDATE rooms SET expires = 0 WHERE id = ?", roomId);
@@ -878,35 +903,24 @@ export class TransferHub {
         segments[4],
       );
       check(targetPeer, 404, "Student not found.");
-      if (body.state === "approved" && targetPeer.state === "declined")
-        check(
-          this.one(
-            "SELECT count(*) AS n FROM peers WHERE room = ? AND state != 'declined'",
-            roomId,
-          ).n < 20,
-          429,
-          "This desk is full. End a connection before approving another student.",
-        );
-      this.sql.exec(
-        "UPDATE peers SET state = ? WHERE room = ? AND id = ?",
-        body.state,
-        roomId,
-        segments[4],
+      check(
+        body.state !== "approved" || targetPeer.state !== "declined",
+        409,
+        "This request has ended. Ask the student to request a new connection.",
       );
       if (body.state === "declined") {
-        this.sql.exec(
-          "DELETE FROM chunks WHERE transfer IN (SELECT id FROM transfers WHERE room = ? AND (sender = ? OR recipient = ?) AND state != 'received')",
+        this.declinePeer(
           roomId,
           segments[4],
-          segments[4],
+          "The desk ended this connection.",
         );
+      } else
         this.sql.exec(
-          "UPDATE transfers SET state = 'rejected', error = 'The desk ended this connection.' WHERE room = ? AND (sender = ? OR recipient = ?) AND state != 'received'",
+          "UPDATE peers SET state = ? WHERE room = ? AND id = ?",
+          body.state,
           roomId,
           segments[4],
-          segments[4],
         );
-      }
       return json({ state: body.state });
     }
     if (

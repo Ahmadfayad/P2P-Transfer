@@ -614,7 +614,7 @@ test("ended visitors release capacity without deleting transfer history", async 
         body: JSON.stringify({ state: "approved" }),
       }),
     );
-    assert.equal(reapprove.status, 429);
+    assert.equal(reapprove.status, 409);
     assert.equal(
       database.prepare("SELECT state FROM transfers WHERE id = ?").get(transfer)
         .state,
@@ -688,4 +688,132 @@ test("revoked direct peers close their channel and discard only their packets", 
   assert.equal(direct.pendingIce.size, 0);
   direct.close();
   assert.equal(closed, 4);
+});
+
+test("visitors can withdraw only their own request; stale approval cannot revive it", async () => {
+  const { hub, database } = service();
+  try {
+    const key = (await identity()).publicKey;
+    const staffHeaders = { "X-Account-ID": "owner", "X-Account-Role": "staff" };
+    const room = await (
+      await hub.fetch(
+        new Request("https://test/api/rooms", {
+          method: "POST",
+          headers: staffHeaders,
+          body: JSON.stringify({ name: "Desk", publicKey: key }),
+        }),
+      )
+    ).json();
+    staffHeaders.Authorization = "Bearer " + room.token;
+    const join = async (name) =>
+      (
+        await hub.fetch(
+          new Request(`https://test/api/rooms/${room.id}/join`, {
+            method: "POST",
+            headers: { "X-Access-Mode": "guest", "X-Invite": room.invite },
+            body: JSON.stringify({ name, publicKey: key }),
+          }),
+        )
+      ).json();
+    const first = await join("First"),
+      second = await join("Second");
+    const api = (suffix, headers, body = {}) =>
+      hub.fetch(
+        new Request(`https://test/api/rooms/${room.id}${suffix}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        }),
+      );
+    const guestHeaders = {
+      "X-Access-Mode": "guest",
+      Authorization: "Bearer " + first.token,
+    };
+    assert.equal((await api("/leave", staffHeaders)).status, 403);
+    assert.equal(
+      (await api("/leave", { "X-Access-Mode": "guest" })).status,
+      401,
+    );
+    assert.equal(
+      (await api("/peers/" + first.id, staffHeaders, { state: "approved" }))
+        .status,
+      200,
+    );
+    const received = crypto.randomUUID(),
+      unfinished = crypto.randomUUID();
+    for (const id of [received, unfinished]) {
+      assert.equal(
+        (
+          await api("/transfers", guestHeaders, {
+            id,
+            name: "saved.pdf",
+            size: 8,
+            to: "desk",
+          })
+        ).status,
+        201,
+      );
+      assert.equal(
+        (await api(`/transfers/${id}/accept`, staffHeaders)).status,
+        200,
+      );
+      const upload = await hub.fetch(
+        new Request(
+          `https://test/api/rooms/${room.id}/transfers/${id}/chunks/0`,
+          {
+            method: "PUT",
+            headers: guestHeaders,
+            body: new Uint8Array(36),
+          },
+        ),
+      );
+      assert.equal(upload.status, 201);
+      if (id === received) {
+        assert.equal(
+          (await api(`/transfers/${id}/ack`, staffHeaders, { next: 1 })).status,
+          200,
+        );
+        assert.equal(
+          (
+            await api(`/transfers/${id}/complete`, staffHeaders, {
+              size: 8,
+              integrity: "verified",
+            })
+          ).status,
+          200,
+        );
+      }
+    }
+    assert.equal(
+      (await api("/leave", guestHeaders, { peer: second.id })).status,
+      200,
+    );
+    assert.equal(
+      database.prepare("SELECT state FROM peers WHERE id = ?").get(second.id)
+        .state,
+      "pending",
+    );
+    assert.equal(
+      database.prepare("SELECT state FROM transfers WHERE id = ?").get(received)
+        .state,
+      "received",
+    );
+    assert.equal(
+      database
+        .prepare("SELECT state FROM transfers WHERE id = ?")
+        .get(unfinished).state,
+      "rejected",
+    );
+    assert.equal(
+      database.prepare("SELECT count(*) AS n FROM chunks").get().n,
+      0,
+    );
+    assert.equal(
+      (await api("/peers/" + first.id, staffHeaders, { state: "approved" }))
+        .status,
+      409,
+    );
+  } finally {
+    database.close();
+  }
 });

@@ -18,6 +18,7 @@ const diagnosticRoutes = [
   "/api/health",
   "/api/rooms",
   "/api/rooms/:room/join",
+  "/api/rooms/:room/leave",
   "/api/rooms/:room",
   "/api/rooms/:room/state",
   "/api/rooms/:room/diagnostics",

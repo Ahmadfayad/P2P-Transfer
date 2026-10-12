@@ -46,6 +46,7 @@ export async function requireLogin() {
       "Account service unavailable. Please try signing in again.";
   }
   if (!currentUser) {
+    login.hidden = false;
     currentUser = await new Promise((resolve) => {
       form.onsubmit = async (event) => {
         event.preventDefault();

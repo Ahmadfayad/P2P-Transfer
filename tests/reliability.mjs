@@ -1,6 +1,6 @@
 // Isolated loopback relay: no deployment, real accounts or secrets are used.
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
@@ -32,7 +32,22 @@ const hub = new TransferHub(
 );
 const server = createServer(async (req, res) => {
   try {
-    if (req.url.startsWith("/api/")) {
+    if (req.url === "/api/auth/get-session" || req.url === "/api/health") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify(
+          req.url === "/api/health"
+            ? { ok: true, protocol: 3 }
+            : {
+                user: {
+                  id: "fixture-owner",
+                  name: "Fixture staff",
+                  role: "staff",
+                },
+              },
+        ),
+      );
+    } else if (req.url.startsWith("/api/")) {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const headers = new Headers(req.headers);
@@ -56,7 +71,13 @@ const server = createServer(async (req, res) => {
     } else if (req.url === "/") {
       res.setHeader("Content-Type", "text/html");
       res.end("<!doctype html><main></main>");
-    } else if (/^\/[a-z-]+\.js$/.test(req.url)) {
+    } else if (["/ui", "/student"].includes(req.url)) {
+      res.setHeader("Content-Type", "text/html");
+      res.end(await readFile(new URL("../public/index.html", import.meta.url)));
+    } else if (req.url === "/style.css") {
+      res.setHeader("Content-Type", "text/css");
+      res.end(await readFile(new URL("../public/style.css", import.meta.url)));
+    } else if (/^\/(?:vendor\/)?[a-z-]+\.js$/.test(req.url)) {
       res.setHeader("Content-Type", "text/javascript");
       res.end(await readFile(new URL("../public" + req.url, import.meta.url)));
     } else {
@@ -373,6 +394,212 @@ try {
     assert.equal(log.includes(secret), false);
   console.log(
     "PASS format-2 downloaded log sanitizes old events and excludes file names and credentials",
+  );
+  const staffContext = await browser.newContext();
+  const studentContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+  });
+  const secondContext = await browser.newContext();
+  const uiStaff = await staffContext.newPage(),
+    uiStudent = await studentContext.newPage(),
+    uiSecond = await secondContext.newPage();
+  for (const page of [uiStaff, uiStudent, uiSecond])
+    page.on("pageerror", (error) => errors.push(error.message));
+  await uiStaff.goto(base + "/ui");
+  await uiStaff.locator("#desk-name").fill("Student Services");
+  await uiStaff.locator("#desk-form button").click();
+  await uiStaff.locator("#workspace").waitFor();
+  const invitation = await uiStaff.evaluate(async () => {
+    const db = await import("/storage.js"),
+      { fingerprint } = await import("/crypto.js");
+    const session = await db.get(
+      "sessions",
+      sessionStorage.getItem("exchange-session"),
+    );
+    return {
+      room: session.room,
+      invite: session.invite,
+      key: await fingerprint(session.publicKey),
+    };
+  });
+  const invitationURL = base + "/student#" + new URLSearchParams(invitation);
+  let studentAuthRequests = 0;
+  uiStudent.on("request", (req) => {
+    if (req.url().includes("/api/auth/")) studentAuthRequests++;
+  });
+  // Hold the entry module to inspect the first paint before student routing runs.
+  let releaseModule;
+  const moduleReady = new Promise((resolve) => {
+    releaseModule = resolve;
+  });
+  await uiStudent.route("**/app.js", async (route) => {
+    await moduleReady;
+    await route.continue();
+  });
+  await uiStudent.goto(invitationURL, { waitUntil: "commit" });
+  await uiStudent.locator("#login").waitFor({ state: "attached" });
+  assert.equal(await uiStudent.locator("#login").isVisible(), false);
+  releaseModule();
+  await uiStudent.locator("#student-gate[open]").waitFor();
+  await mkdir("test-results", { recursive: true });
+  await uiStudent.screenshot({ path: "test-results/student-entry.png" });
+  await uiStudent
+    .locator("#student-name")
+    .fill("U12345 <script>alert(1)</script>");
+  await uiStudent.locator("#join-form button").click();
+  await uiStudent
+    .getByRole("heading", { name: "Waiting for staff approval" })
+    .waitFor();
+  assert.equal(await uiStudent.locator("#workspace").isVisible(), false);
+  assert.equal(await uiStudent.locator("#files").isDisabled(), true);
+  await uiStudent.locator("#files").setInputFiles({
+    name: "before-approval.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.7"),
+  });
+  assert.equal(
+    await uiStudent.evaluate(
+      async () => (await (await import("/storage.js")).all("files")).length,
+    ),
+    0,
+  );
+  await uiStudent.screenshot({ path: "test-results/student-waiting.png" });
+  await uiStudent.keyboard.press("Escape");
+  assert.equal(
+    await uiStudent.locator("#student-gate").evaluate((el) => el.open),
+    true,
+  );
+  const beforeReload = database
+    .prepare("SELECT count(*) AS n FROM peers WHERE room = ?")
+    .get(invitation.room).n;
+  await uiStudent.reload();
+  await uiStudent
+    .getByRole("heading", { name: "Waiting for staff approval" })
+    .waitFor();
+  assert.equal(
+    database
+      .prepare("SELECT count(*) AS n FROM peers WHERE room = ?")
+      .get(invitation.room).n,
+    beforeReload,
+  );
+  assert.equal(await uiStudent.locator("#login").isVisible(), false);
+  assert.equal(
+    await uiStudent.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  );
+  await uiSecond.goto(invitationURL);
+  await uiSecond.locator("#student-name").fill("U67890");
+  await uiSecond.locator("#join-form button").click();
+  await uiSecond
+    .getByRole("heading", { name: "Waiting for staff approval" })
+    .waitFor();
+  await uiStaff.locator("#approval-dialog[open]").waitFor({ timeout: 20000 });
+  await uiStaff.screenshot({ path: "test-results/staff-approval.png" });
+  assert.equal(
+    await uiStaff.locator("#approval-identity").textContent(),
+    "U12345 <script>alert(1)</script>",
+  );
+  assert.equal(await uiStaff.locator("#approval-identity script").count(), 0);
+  await uiStaff.locator("#approval-reject").click();
+  await uiStudent
+    .getByRole("heading", { name: "Request not accepted" })
+    .waitFor({ timeout: 20000 });
+  await uiStaff
+    .locator("#approval-identity")
+    .filter({ hasText: "U67890" })
+    .waitFor();
+  await uiStaff.locator("#approval-approve").click();
+  await uiSecond.locator("#workspace").waitFor({ timeout: 20000 });
+  assert.equal(await uiSecond.locator("#files").isEnabled(), true);
+  await uiSecond.reload();
+  await uiSecond.locator("#workspace").waitFor();
+  assert.equal(
+    await uiSecond.locator("#student-gate").evaluate((el) => el.open),
+    false,
+  );
+  await uiStudent.locator("#student-cancel").click();
+  await uiStudent
+    .getByRole("heading", { name: "Connect to the desk" })
+    .waitFor();
+  await uiStudent.locator("#student-name").fill("Cancel this request");
+  await uiStudent.locator("#join-form button").click();
+  await uiStudent
+    .getByRole("heading", { name: "Waiting for staff approval" })
+    .waitFor();
+  await uiStudent.locator("#student-cancel").click();
+  await uiStudent
+    .getByRole("heading", { name: "Connect to the desk" })
+    .waitFor();
+  assert.equal(
+    database
+      .prepare("SELECT state FROM peers WHERE room = ? AND name = ?")
+      .get(invitation.room, "Cancel this request").state,
+    "declined",
+  );
+  assert.equal(studentAuthRequests, 0);
+  assert.deepEqual(errors, []);
+  // Employee sign-in still appears when no employee session is present.
+  const loggedOut = await staffContext.newPage();
+  await loggedOut.route("**/api/auth/get-session", (route) =>
+    route.fulfill({ json: null }),
+  );
+  await loggedOut.goto(base + "/ui");
+  await loggedOut.locator("#login").waitFor();
+  await uiSecond.locator("#files").setInputFiles({
+    name: "ui-saved.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.7\nSaved UI regression document"),
+  });
+  await uiStaff
+    .locator("#file-list .file")
+    .filter({ hasText: "ui-saved.pdf" })
+    .getByText("Received", { exact: false })
+    .waitFor({ timeout: 30000 });
+  await uiSecond
+    .locator("#file-list .file")
+    .filter({ hasText: "ui-saved.pdf" })
+    .getByText("Received", { exact: false })
+    .waitFor({ timeout: 30000 });
+  assert.equal(
+    await uiStaff.evaluate(async () => {
+      const file = (await (await import("/storage.js")).all("files")).find(
+        (f) => f.name === "ui-saved.pdf",
+      );
+      return file.blob.text();
+    }),
+    "%PDF-1.7\nSaved UI regression document",
+  );
+  await uiStaff
+    .locator("#approval-dialog[open]")
+    .waitFor({ state: "hidden", timeout: 20000 });
+  uiStaff.on("dialog", (dialog) => dialog.accept());
+  await uiStaff.locator("#leave").click();
+  await uiSecond
+    .getByRole("heading", { name: "This session has ended" })
+    .waitFor({ timeout: 20000 });
+  await uiSecond.locator("#student-saved").click();
+  await uiSecond.locator("#saved-card").waitFor();
+  assert.equal(
+    await uiSecond
+      .locator("#saved-list")
+      .getByText("ui-saved.pdf", { exact: true })
+      .isVisible(),
+    true,
+  );
+  await uiSecond.reload();
+  await uiSecond
+    .getByRole("heading", { name: "This session has ended" })
+    .waitFor();
+  await uiSecond.locator("#student-saved").click();
+  await uiSecond
+    .locator("#saved-list")
+    .getByText("ui-saved.pdf", { exact: true })
+    .waitFor();
+  assert.deepEqual(errors, []);
+  console.log(
+    "PASS student first paint, name popup, locked waiting/reload, queued staff approval/rejection, cancellation and employee login",
   );
 } finally {
   await browser?.close();
