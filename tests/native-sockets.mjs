@@ -1,6 +1,6 @@
 // Exercise the compiled Worker and hibernating sockets on a disposable loopback runtime.
 // Fixture employee headers exist ONLY in this test entry, never in the deployed Worker.
-import { Miniflare } from "miniflare";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import assert from "node:assert/strict";
@@ -25,7 +25,7 @@ export default { async fetch(request, env) {
   }
   return worker.fetch(request, env);
 }};`;
-const runtime = new Miniflare({
+const runtime = new Miniflare(convertV4MiniflareOptions({
   modules: [
     { type: "ESModule", path: resolve("tests/native-entry.js"), contents: entry },
     { type: "ESModule", path: resolve("tests/native-worker.js"), contents: bundle },
@@ -33,7 +33,7 @@ const runtime = new Miniflare({
   compatibilityDate: "2026-10-01", compatibilityFlags: ["nodejs_compat"],
   durableObjects: { HUB: { className: "TransferHub", useSQLite: true } },
   bindings: {},
-});
+}));
 const sockets = [];
 try {
   const url = await runtime.ready;
