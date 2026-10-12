@@ -7,8 +7,13 @@
     <link rel="stylesheet" href="/style.css" />
     <script type="module" src="/admin.js"></script>
   </head>
-  <body>
-    <header><a class="brand" href="/">↗ Document Exchange</a></header>
+  <body class="admin-page">
+    <header class="site-header">
+      <a class="brand" href="/"
+        ><span class="brand-mark">↗</span
+        ><span>Document Exchange<small>University of Sharjah</small></span></a
+      ><span class="header-label">Administration</span>
+    </header>
     <nav id="account-tools" hidden aria-label="Account">
       <span id="account-name"></span><a href="/">Transfers</a
       ><a id="admin-link" href="/admin.html" hidden>Manage users</a
@@ -46,14 +51,63 @@
         Administrator access required. <a href="/">Return to transfers</a>.
       </p>
       <div id="administration" hidden>
-        <section class="card">
-          <span class="eyebrow">Administrator</span>
-          <h1>Manage users</h1>
-          <p>
-            Admins manage accounts. Staff open desks. Students join invited
-            desks. Public registration is disabled.
-          </p>
-          <h2>Import users</h2>
+        <section class="admin-hero">
+          <div>
+            <span class="eyebrow">Your control centre</span>
+            <h1>Manage users</h1>
+            <p>
+              A place for every person. Create accounts, assign access and keep
+              your team connected.
+            </p>
+          </div>
+          <button id="add-user-open" type="button" class="hero-button">
+            <span aria-hidden="true">＋</span> Add user
+          </button>
+        </section>
+        <div class="admin-overview">
+          <div class="overview-item">
+            <span class="overview-icon teal" aria-hidden="true">◎</span>
+            <div>
+              <strong id="total-users">—</strong
+              ><span>Registered accounts</span>
+            </div>
+          </div>
+          <div class="overview-item">
+            <span class="overview-icon violet" aria-hidden="true">↗</span>
+            <div>
+              <strong>3 roles</strong><span>Admin · Staff · Student</span>
+            </div>
+          </div>
+          <div class="overview-item">
+            <span class="overview-icon amber" aria-hidden="true">✓</span>
+            <div>
+              <strong>Invite only</strong><span>You control who joins</span>
+            </div>
+          </div>
+        </div>
+        <div class="admin-tabs" aria-label="Admin sections">
+          <button
+            type="button"
+            class="secondary"
+            data-scroll-target="accounts-panel"
+          >
+            People & access</button
+          ><button
+            type="button"
+            class="secondary"
+            data-scroll-target="import-panel"
+          >
+            CSV import
+          </button>
+        </div>
+        <section class="card import-panel" id="import-panel">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Bring your team along</span>
+              <h2>Import users</h2>
+            </div>
+            <span class="section-icon violet" aria-hidden="true">⇧</span>
+          </div>
           <p>
             Upload a CSV with <strong>email,name,role,password</strong>. Roles:
             admin, staff or student. Passwords: 6–128 characters. Maximum 200
@@ -62,8 +116,10 @@
           <p>
             <a href="/users-template.csv" download>Download CSV template</a>
           </p>
-          <label
-            >Users CSV<input id="csv-file" type="file" accept=".csv,text/csv"
+          <label class="csv-upload"
+            >Users CSV<span class="small"
+              >Choose your file to preview accounts before importing.</span
+            ><input id="csv-file" type="file" accept=".csv,text/csv"
           /></label>
           <p id="csv-summary" role="status"></p>
           <div class="table-scroll">
@@ -79,6 +135,13 @@
             </table>
           </div>
           <button id="import-users" type="button" disabled>Import users</button>
+          <progress
+            id="import-progress"
+            max="100"
+            value="0"
+            hidden
+            aria-label="CSV import progress"
+          ></progress>
           <p id="import-result" role="status"></p>
           <ul id="import-errors"></ul>
           <p class="small">
@@ -86,13 +149,20 @@
             Keep the CSV private and remove your copy when finished.
           </p>
         </section>
-        <section class="card">
+        <section class="card accounts-panel" id="accounts-panel">
           <div class="section-heading">
-            <h2>Accounts</h2>
+            <div>
+              <span class="eyebrow">People & permissions</span>
+              <h2>Accounts</h2>
+            </div>
             <button id="refresh-users" class="secondary" type="button">
               Refresh
             </button>
           </div>
+          <p class="small">
+            Choose a role to update access. Disabled accounts cannot sign in.
+            Administrators are protected from accidental removal of access.
+          </p>
           <div class="table-scroll">
             <table>
               <thead>
@@ -118,6 +188,77 @@
         </section>
       </div>
     </main>
+    <div id="admin-toast" class="admin-toast" role="status" hidden></div>
+    <dialog id="add-user-dialog" class="account-dialog">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">Grow your team</span>
+          <h2>Add a user</h2>
+        </div>
+        <button
+          id="add-user-close"
+          type="button"
+          class="secondary compact"
+          aria-label="Close add user"
+        >
+          ✕
+        </button>
+      </div>
+      <p>Create an account and choose what this person can do.</p>
+      <form id="add-user-form" method="post">
+        <label
+          >Full name<input
+            name="name"
+            required
+            maxlength="64"
+            autocomplete="off"
+            placeholder="Their full name"
+        /></label>
+        <label
+          >Email address<input
+            name="email"
+            type="email"
+            required
+            maxlength="254"
+            autocomplete="off"
+            placeholder="name@sharjah.ac.ae"
+        /></label>
+        <label for="new-user-role">Account role</label
+        ><select name="role" id="new-user-role">
+          <option value="student">Student</option>
+          <option value="staff">Staff</option>
+          <option value="admin">Administrator</option>
+        </select>
+        <p id="new-role-description" class="role-description">
+          Students join an invited desk and exchange documents.
+        </p>
+        <label
+          >Temporary password<input
+            name="password"
+            type="password"
+            required
+            minlength="6"
+            maxlength="128"
+            autocomplete="new-password"
+            placeholder="At least 6 characters"
+        /></label>
+        <button
+          id="new-password-toggle"
+          type="button"
+          class="text-button"
+          aria-pressed="false"
+        >
+          Show password
+        </button>
+        <p class="small">
+          Share this password privately. They can change it after signing in.
+        </p>
+        <button type="submit">
+          Create user <span aria-hidden="true">↗</span>
+        </button>
+        <p id="add-user-error" role="alert"></p>
+      </form>
+    </dialog>
     <dialog id="reset-dialog">
       <h2>Reset user password</h2>
       <p id="reset-user"></p>

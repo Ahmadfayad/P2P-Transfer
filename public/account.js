@@ -19,6 +19,19 @@ export async function requireLogin() {
   const form = document.getElementById("login-form"),
     error = document.getElementById("login-error");
   form.onsubmit = (event) => event.preventDefault();
+  const passwordInput = form.elements.password;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "text-button login-password-toggle";
+  toggle.textContent = "Show password";
+  toggle.setAttribute("aria-pressed", "false");
+  toggle.onclick = () => {
+    const showing = passwordInput.type === "password";
+    passwordInput.type = showing ? "text" : "password";
+    toggle.textContent = showing ? "Hide password" : "Show password";
+    toggle.setAttribute("aria-pressed", String(showing));
+  };
+  passwordInput.closest("label").after(toggle);
   const login = document.getElementById("login");
   try {
     currentUser = (await accountRequest("auth/get-session"))?.user;
@@ -30,7 +43,7 @@ export async function requireLogin() {
     currentUser = await new Promise((resolve) => {
       form.onsubmit = async (event) => {
         event.preventDefault();
-        const button = form.querySelector("button");
+        const button = form.querySelector("button[type=submit]");
         button.disabled = true;
         error.textContent = "";
         try {
@@ -47,7 +60,7 @@ export async function requireLogin() {
           button.disabled = false;
         }
       };
-      form.querySelector("button").disabled = false;
+      form.querySelector("button[type=submit]").disabled = false;
     });
   }
   login.hidden = true;

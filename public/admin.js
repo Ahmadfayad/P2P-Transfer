@@ -5,6 +5,78 @@ let usersToImport = [],
   offset = 0,
   resetting,
   importing = false;
+let toastTimer;
+function notify(text) {
+  $("admin-toast").textContent = text;
+  $("admin-toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    $("admin-toast").hidden = true;
+  }, 5000);
+}
+const roleDescriptions = {
+  student: "Students join an invited desk and exchange documents.",
+  staff: "Staff open desks, approve students and exchange documents.",
+  admin:
+    "Administrators manage accounts and roles, and can also open desks. Only assign this role to trusted people.",
+};
+$("new-user-role").onchange = (event) => {
+  $("new-role-description").textContent = roleDescriptions[event.target.value];
+};
+$("add-user-open").onclick = () => {
+  $("add-user-form").reset();
+  $("add-user-error").textContent = "";
+  $("new-role-description").textContent = roleDescriptions.student;
+  $("add-user-form").elements.password.type = "password";
+  $("new-password-toggle").textContent = "Show password";
+  $("new-password-toggle").setAttribute("aria-pressed", "false");
+  $("add-user-dialog").showModal();
+};
+$("add-user-close").onclick = () => $("add-user-dialog").close();
+$("add-user-dialog").addEventListener("close", () =>
+  $("add-user-form").reset(),
+);
+$("new-password-toggle").onclick = (event) => {
+  const input = $("add-user-form").elements.password,
+    showing = input.type === "password";
+  input.type = showing ? "text" : "password";
+  event.currentTarget.textContent = showing ? "Hide password" : "Show password";
+  event.currentTarget.setAttribute("aria-pressed", String(showing));
+};
+$("add-user-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget,
+    button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  $("add-user-error").textContent = "";
+  let created = false;
+  try {
+    const body = Object.fromEntries(new FormData(form));
+    await accountRequest("admin/users", body);
+    created = true;
+    form.reset();
+    $("add-user-dialog").close();
+    notify("User created. Share their temporary password privately.");
+    offset = 0;
+    await listUsers();
+  } catch (e) {
+    if ($("add-user-dialog").open) $("add-user-error").textContent = e.message;
+    else if (created)
+      $("admin-error").textContent =
+        "User was created, but the account list could not refresh. Select Refresh.";
+    else notify(e.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+for (const button of document.querySelectorAll("[data-scroll-target]"))
+  button.onclick = () =>
+    $(button.dataset.scrollTarget).scrollIntoView({
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+      block: "start",
+    });
 const node = (tag, text) => {
   const element = document.createElement(tag);
   if (text !== undefined) element.textContent = text;
@@ -23,6 +95,7 @@ async function action(button, run) {
 }
 async function listUsers() {
   const result = await accountRequest("admin/users?offset=" + offset);
+  $("total-users").textContent = result.total;
   $("users").replaceChildren();
   for (const user of result.users) {
     const row = node("tr"),
@@ -51,9 +124,14 @@ async function listUsers() {
         }
       });
     roleCell.append(select);
-    row.append(roleCell, node("td", user.banned ? "Disabled" : "Active"));
+    const stateCell = node("td"),
+      badge = node("span", user.banned ? "Disabled" : "Active");
+    badge.className = "status-badge " + (user.banned ? "disabled" : "active");
+    stateCell.append(badge);
+    row.append(roleCell, stateCell);
     const actions = node("td");
-    actions.className = "admin-actions";
+    const actionGroup = node("div");
+    actionGroup.className = "admin-actions";
     if (user.role !== "admin") {
       const status = node("button", user.banned ? "Enable" : "Disable");
       status.type = "button";
@@ -76,8 +154,9 @@ async function listUsers() {
         $("reset-form").reset();
         $("reset-dialog").showModal();
       };
-      actions.append(status, reset);
-    } else actions.append(node("span", "Protected administrator"));
+      actionGroup.append(status, reset);
+    } else actionGroup.append(node("span", "Protected administrator"));
+    actions.append(actionGroup);
     row.append(actions);
     $("users").append(row);
   }
@@ -119,6 +198,9 @@ $("csv-file").onchange = async (event) => {
 };
 $("import-users").onclick = async () => {
   importing = true;
+  $("import-progress").hidden = false;
+  $("import-progress").max = usersToImport.length;
+  $("import-progress").value = 0;
   $("import-users").disabled = true;
   $("csv-file").disabled = true;
   let created = 0,
@@ -133,11 +215,15 @@ $("import-users").onclick = async () => {
     }
     $("import-result").textContent =
       `${created} created · ${failed} failed · ${usersToImport.length - created - failed} remaining`;
+    $("import-progress").value = created + failed;
   }
   usersToImport = [];
   $("csv-file").value = "";
   $("csv-file").disabled = false;
   importing = false;
+  notify(
+    `Import finished: ${created} created${failed ? `, ${failed} need attention` : ""}.`,
+  );
   $("csv-summary").textContent =
     "Import finished. Failed rows can be corrected and uploaded again.";
   try {
