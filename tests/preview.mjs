@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { login, cleanupAuthFixtures } from "./auth-helper.mjs";
 const base = process.env.TEST_URL || "http://127.0.0.1:8787";
 let pdf = "%PDF-1.4\n";
 const offsets = [0];
@@ -36,7 +37,9 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  await login(page, base);
   await page.goto(base);
+  await page.getByRole("button", { name: "Open desk" }).waitFor();
   await page.evaluate(async (pdf) => {
     const db = await import("/storage.js");
     for (const [name, text, mime] of [
@@ -70,7 +73,11 @@ try {
   await row("preview.pdf")
     .getByRole("button", { name: "Preview", exact: true })
     .click();
-  await page.waitForFunction(() => document.querySelector('#preview-content iframe')?.contentDocument?.contentType === 'application/pdf');
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#preview-content iframe")?.contentDocument
+        ?.contentType === "application/pdf",
+  );
   await mkdir("test-results", { recursive: true });
   await page.screenshot({
     path: "test-results/pdf-preview.png",
@@ -81,7 +88,11 @@ try {
   await row("fake.pdf")
     .getByRole("button", { name: "Preview", exact: true })
     .click();
-  await page.waitForFunction(() => document.querySelector('#preview-content iframe')?.contentDocument?.contentType === 'application/pdf');
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#preview-content iframe")?.contentDocument
+        ?.contentType === "application/pdf",
+  );
   assert.equal(await page.evaluate(() => window.previewAttack), undefined);
   console.log(
     "PASS HTML content and a false MIME claim cannot execute in PDF preview",
@@ -89,4 +100,5 @@ try {
   assert.deepEqual(errors, []);
 } finally {
   await browser.close();
+  await cleanupAuthFixtures();
 }

@@ -3,6 +3,7 @@ import { identity, fingerprint } from "./crypto.js";
 import { Exchange, request, finishFile } from "./transfer.js";
 import { csvCell, chunkCount, fileType } from "./protocol.js";
 import QRCode from "./vendor/qrcode.js";
+import { requireLogin } from "./account.js";
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
 const invitation = fragment.has("room")
@@ -374,6 +375,7 @@ async function begin(saved) {
   session = saved;
   lastState = null;
   await db.put("sessions", saved);
+  sessionStorage.setItem("exchange-session", saved.id);
   localStorage.setItem("exchange-session", saved.id);
   exchange = new Exchange(session, (state) => {
     if (exchange?.session === saved) renderState(state);
@@ -432,10 +434,8 @@ $("desk-form").onsubmit = (event) => {
       await request("/rooms", {
         method: "POST",
         body: { name, publicKey: keys.publicKey },
-        headers: { "X-Setup-Key": $("setup-key").value },
       })
     ).json();
-    $("setup-key").value = "";
     await begin({
       id: room.id,
       room: room.id,
@@ -452,6 +452,17 @@ $("join-form").onsubmit = (event) => {
     if (!invitation?.fingerprint || !invitation.invite)
       throw new Error(
         "This invitation is incomplete. Ask the desk for a new link.",
+      );
+    if (
+      (await db.all("sessions")).some(
+        (s) =>
+          s.room === invitation.room &&
+          s.self === "desk" &&
+          s.expires > Date.now(),
+      )
+    )
+      throw new Error(
+        "This browser owns this desk. Open its student invitation on a separate device or browser profile.",
       );
     const keys = await identity();
     const result = await (
@@ -498,6 +509,7 @@ $("leave").onclick = async () => {
     exchange.stop();
     clearTimeout(timer);
     localStorage.removeItem("exchange-session");
+    sessionStorage.removeItem("exchange-session");
     session = null;
     lastState = null;
     $("workspace").hidden = true;
@@ -575,13 +587,48 @@ window.addEventListener("online", () => {
 });
 async function init() {
   try {
+    const user = await requireLogin();
+    db.useAccount(user.id);
+    $("legacy-recovery").hidden = !(await db.legacyAvailable());
+    $("recover-legacy").onclick = async () => {
+      $("recover-legacy").disabled = true;
+      try {
+        const count = await db.recoverLegacy(user.id);
+        $("legacy-recovery").hidden = true;
+        const saved = await db.get(
+          "sessions",
+          sessionStorage.getItem("exchange-session") ||
+            localStorage.getItem("exchange-session") ||
+            "",
+        );
+        if (
+          !exchange &&
+          saved &&
+          saved.expires > Date.now() &&
+          (!invitation || saved.room === invitation.room)
+        )
+          await begin(saved);
+        await renderFiles();
+        message(`${count} earlier files recovered into your account.`);
+      } catch (e) {
+        message(e.message);
+      } finally {
+        $("recover-legacy").disabled = false;
+      }
+    };
+    $("welcome").hidden = false;
+    $("desk-form").hidden = user.role === "student";
+    $("student-start").hidden = user.role !== "student" || Boolean(invitation);
+    $("student-name").value = user.name;
     if (!crypto.subtle)
       throw new Error(
         "Open this service over HTTPS to enable private transfers.",
       );
     const saved = await db.get(
       "sessions",
-      localStorage.getItem("exchange-session") || "",
+      sessionStorage.getItem("exchange-session") ||
+        localStorage.getItem("exchange-session") ||
+        "",
     );
     if (
       saved &&

@@ -443,3 +443,44 @@ dialog::backdrop {
     gap: 10px;
   }
 }
+nav#account-tools {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
+}
+.login-card {
+  max-width: 440px;
+  margin: 3rem auto;
+}
+.admin-layout {
+  max-width: 1000px;
+  margin: auto;
+}
+.admin-layout table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.admin-layout th,
+.admin-layout td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #dde5df;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+.admin-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+@media (max-width: 600px) {
+  nav#account-tools {
+    padding: 1rem;
+  }
+}

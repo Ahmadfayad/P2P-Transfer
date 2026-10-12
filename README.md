@@ -1,64 +1,78 @@
 # Document Exchange
 
-A private document handover between a university desk and approved students. The browser attempts a direct WebRTC connection; ordinary HTTPS is always available as a fallback. No paid TURN service, database, domain or subscription is required.
+A private document handover between university staff and approved students. Everyone signs in first. WebRTC provides direct transfers when available; encrypted HTTPS chunks provide recovery when direct routes are blocked. Cloudflare Workers Free hosts transfers; Neon Free stores accounts. No paid TURN provider, domain or subscription is required.
 
-[Open the deployed service](https://uos-document-exchange.uos-document-exchange.workers.dev). The private staff access key is supplied separately and is never committed to this repository.
+[Open the deployed service](https://uos-document-exchange.uos-document-exchange.workers.dev). Initial administrator credentials are supplied privately and never committed. The [original audit](docs/AUDIT.md) documents the former security and reliability problems.
 
-The [audit of the original version](docs/AUDIT.md) documents the former impersonation, unsafe preview, false delivery, lost-file and network reliability problems. This implementation replaces the public signaling and client-side role controls with authenticated sessions, durable local files, verified receipts and HTTPS recovery. The original implementation remains in Git history; the root page points users to the new service.
+## Accounts and administration
 
-## Use it
+Public registration is disabled. Admins manage users; staff open desks; students join invited desks. All transfer APIs require a valid account, and room credentials are bound to that account. An invitation or a copied room token alone cannot access another account's session.
 
-Staff open the website, enter a desk name and the private desk access key, then share the generated QR code. Students open that invitation and enter a name or student ID. Staff approve each connection and can send documents back to that student.
+Open **Manage users** (`/admin.html`) to upload a CSV with exactly `email,name,role,password`. Review its preview, then import. Roles are `admin`, `staff` and `student`; passwords contain **6–128 characters**. The server rejects shorter passwords. Import at most 200 rows per file. Quoted names, commas, Unicode and spreadsheet CSV files are supported; duplicate emails and malformed rows are rejected before import begins. The preview does not display passwords.
 
-Keep both pages open until **Received ✓** appears. That receipt means the receiving browser verified and saved the entire document. It does not mean the person downloaded a permanent copy or read it. Use **Save a copy** before removing a file, clearing browser data, or using a shared computer.
+Existing accounts are reported and kept unchanged. An interrupted import reports completed and failed rows; reimporting does not overwrite existing passwords or roles. Admins can change roles, disable non-admin accounts and reset passwords. Disabling and password resets revoke existing sign-ins. Administrator accounts are protected against these controls to prevent accidental lockout. Users can change their own passwords.
 
-Refresh the same browser to resume a session or recover saved files. Temporarily interrupted transfers retry without restarting from the beginning. Original outgoing documents remain saved for manual resending when a session expires. **Send again** starts a new transfer; it is not a continuation across expired sessions.
+Share passwords privately and delete your CSV copy when finished. Account creation does not send email or verify university mailbox ownership. Imported accounts are controlled by the administrator and are not university SSO. No paid email provider is needed.
+
+## Transfers and recovery
+
+Staff sign in, enter a desk name and share the generated QR code. Students open that invitation and sign in. Staff approve each connection before files can be exchanged. Keep both pages open until **Received ✓**: the receiver has verified and saved the complete document. This does not mean the person downloaded or read it. Use **Save a copy** before clearing browser data or removing a file.
+
+Use separate devices or browser profiles for a desk and its student. Tabs retain their own role on refresh. A staff tab may visit another desk; it cannot join its own desk and mix sender/receiver storage.
+
+Verified chunks are saved in IndexedDB before acknowledgement. Interrupted transfers retry from their saved offset. Completed incoming files and original outgoing files remain locally available after the session ends. **Send again** starts a new transfer across expired sessions. A final receipt is never issued for a document that was not fully assembled and saved.
+
+Files and encryption keys are separated by account in the browser. Sign-out hides them, and another person's login cannot display them. **Recover earlier files** can claim this browser's files from before sign-in into one account, retaining the original copy. Valid old room credentials can be bound to that account once. Recover only files belonging to you. Browser storage is not a backup.
+
+## Implementation
+
+Better Auth 1.7.7 stores users, hashed credentials and sessions in Neon's PostgreSQL database. Managed Neon Auth rejected six-character passwords during testing, so this deployment uses self-managed Better Auth with `minPasswordLength: 6`. Passwords are HMAC-peppered and bcrypt-hashed at cost 12 in PostgreSQL (`pgcrypto`); expensive hashing does not consume the free Worker's CPU allowance. Plaintext passwords are not stored. Login limits are atomic per email (10 attempts/minute), with a broader shared-IP limit suitable for university NAT.
+
+The QR fragment pins the desk public-key fingerprint and carries an invitation secret, never the private desk token. ECDH-derived AES-GCM keys encrypt document chunks in the browsers, binding room, participants, filename, size and chunk position. Cloudflare holds metadata and bounded encrypted chunks; it does not receive plaintext files or browser encryption keys. Compromised site JavaScript remains a threat.
+
+PDF and image previews use fixed canonical MIME types. HTML and SVG are not embedded as executable documents. DOCX is download-only and checked as a ZIP container. This is not an antivirus or content scanner. The QR library is bundled locally with its MIT notices; no external script/CSS CDN is required.
 
 ## Run locally
 
-Use Node.js 24 or newer and install dependencies with `npm ci`. Create an untracked `.dev.vars` file containing `DESK_SETUP_KEY=your-random-secret-of-at-least-16-characters`. Use a cryptographically random secret, not an ordinary password. Run `npm run dev`, then open the localhost address printed by Wrangler. Web Crypto requires HTTPS or localhost.
+Use Node.js 24+, then `npm ci`. Create an untracked `.dev.vars` with:
 
-Run `npm run check` and `npm test`. For actual browser tests, run `npx playwright install chromium`, start the development server, then run `npm run test:browser`. The test also accepts `CHROME_PATH` for an installed Chrome executable, `TEST_URL` for a deployed service, and `DESK_SETUP_KEY` for its test access key. Tests create and end their own desk sessions.
+```
+DATABASE_URL=your-dedicated-Neon-connection-string
+BETTER_AUTH_URL=http://127.0.0.1:8788
+BETTER_AUTH_SECRET=your-cryptographically-random-secret-of-at-least-32-characters
+```
 
-The browser test checks both directions, real direct-channel negotiation followed by a deliberate mid-transfer channel failure, HTTPS with WebRTC disabled, refresh recovery, a network interruption, a lost acknowledgement, exact file bytes, and document retention after ending a session. It also ends a session after all verified chunks are saved but before the final acknowledgement: the document remains recoverable, and the sender never sees a false receipt. The student page uses a phone-sized viewport. It is not a test on the university's actual network or on an actual phone.
+Run `node scripts/setup-auth.mjs` to install the additive schema and initial administrator. Set `ADMIN_EMAIL` first for another deployment. Setup generates a secret if absent and saves initial credentials outside Git in `../ADMIN-ACCESS-PRIVATE.txt`. Existing administrator passwords are left unchanged. Run `npx wrangler dev --port 8788`. Open exactly the configured origin; browser crypto needs HTTPS or localhost.
 
-## Deploy for free
+Run `npm run check` and `npm test`. Real browser checks: install Chromium (`npx playwright install chromium`), start the app, then set `TEST_URL=http://127.0.0.1:8788` and run `npm run test:browser`. `CHROME_PATH` can point to installed Chrome. Tests create random accounts, remove their temporary accounts afterwards. Account tests use the private initial administrator credentials; update that local file if you change that test administrator's password.
 
-1. Use a Cloudflare account on **Workers Free**. Do not upgrade its plan or add a paid TURN provider. This repository binds only static assets and a SQLite Durable Object, which are available on Free.
-2. Replace `account_id` in `wrangler.jsonc` if deploying to another account. Run `npx wrangler login`, then `npm run deploy`. On first deployment, register a free `workers.dev` subdomain when prompted.
-3. Set the production access secret with `npx wrangler secret put DESK_SETUP_KEY`. Enter the secret when prompted. `.dev.vars` is local-only and is not uploaded automatically.
-4. Open the deployed HTTPS address. Keep the staff secret private; it must never be included in a student invitation, a public repository, or browser diagnostics.
+Checks cover CSV validation, six-character login, role enforcement, password changes/resets, disabling accounts, reload, account isolation, recovery of earlier files, authenticated relay, exact file bytes, offline/refresh recovery, lost acknowledgements, direct-to-HTTPS recovery, reverse transfers and safe previews.
 
-Static assets are committed, including the QR library. `npm run build:qr` rebuilds that bundle after updating its dependency. No external JavaScript/CSS CDN is needed. Wrangler deploys `public/`; the root `index.html` is a migration landing page. GitHub Pages can serve that landing page but cannot run the new API: share the new Worker address after rollout.
+## Free deployment
 
-## What recovery does
+Use Cloudflare Workers Free. Replace `account_id` in `wrangler.jsonc` for another account and run `npx wrangler login`. Store `DATABASE_URL` and `BETTER_AUTH_SECRET` with `npx wrangler secret put`, then `npm run deploy`. Set `BETTER_AUTH_URL` to the live Cloudflare origin. Local `.dev.vars` is not uploaded. Do not rotate the auth secret without a password migration: it also peppers password hashes. The old `DESK_SETUP_KEY` is unused.
 
-The sender first saves its original file in IndexedDB. A recipient reserves device storage before accepting. Each 512 KiB chunk is encrypted with AES-GCM using a peer-to-peer ECDH key, including the file identity and chunk position as authenticated data. A direct data-channel chunk gets a brief opportunity to arrive; otherwise the sender uploads that same encrypted chunk over HTTPS.
+Vercel Hobby can serve `public/` and proxy `/api/*` to Cloudflare through `vercel.json`. Register each exact Vercel origin in `FRONTEND_ORIGINS`; arbitrary origins remain blocked. `.vercelignore` uploads only static assets and configuration. Database credentials belong only in Cloudflare secrets. Enable **Web Analytics** in the Vercel dashboard. Its script loads only on Vercel addresses and excludes query parameters/fragments. Account names, emails, passwords and file metadata are not sent as analytics events. Analytics activation and production promotion are separate steps.
 
-The recipient verifies and commits a chunk to IndexedDB **before** acknowledging it. Acknowledgements are monotonic and retryable. Once every chunk has been acknowledged, the recipient assembles the file and commits it durably before sending the final receipt. The relay then deletes buffered ciphertext. A refresh reloads the saved private key, original file and chunk offset. Cloudflare stores connection metadata and limited encrypted chunks; it does not receive plaintext document bytes or browser private keys.
+## Limits and remaining risks
 
-The QR fragment pins the desk public-key fingerprint and contains an invitation secret, not the staff's owner token. Server-side approval gates file and signaling endpoints. Typed student IDs are labels, **not verified university identities**. Staff should check the person before approving. Invitation holders can request a connection until the desk session ends; there is no public room discovery.
+- PDF, DOCX, PNG and JPG; 150 MiB/file; 300 MiB reserved local files; eight-hour rooms; ten desks; twenty students/desk; one hundred transfers/room. One small relay hub serves this deployment.
+- Remote buffering is bounded to 32 MiB and four chunks per transfer. Expired metadata/chunks are cleaned by an alarm. Idle polling is fifteen seconds; active polling slows when progress stops. Failed requests back off. Direct negotiation is capped at three attempts/peer/page; HTTPS remains available.
+- Free Cloudflare, Neon and Vercel quotas are shared with other projects. Exhausted quotas or provider outages can interrupt service; no paid capacity or upgrades are configured. Neon is required for authenticated API access, and a cold database can add latency.
+- Sleeping devices, closed tabs, browser eviction, cleared site data and network outages can prevent continuation. Save received documents to permanent storage.
+- If IT blocks the HTTPS address, the application cannot guarantee connectivity. Test the actual campus network. An IT-approved address is the dependable solution when domains are blocked.
+- Browser checks use desktop Chromium and a phone-sized viewport. Real campus Wi-Fi/Ethernet, real phones/Safari and simultaneous university-scale load still need a pilot.
 
-## Bounds and limitations
-
-- PDF, DOCX, PNG and JPEG only. 150 MiB per file; 300 MiB reserved document storage per browser. Actual browser storage may be smaller. Storage errors stop acknowledgements instead of discarding the original.
-- Up to 10 desks, 20 student connections per desk, and 100 transfers per desk session. Sessions expire after 8 hours. There is one bounded server hub for this small deployment, not an unlimited public file-sharing platform.
-- A global 32 MiB relay buffer and a four-chunk server window bound remote storage. Expired metadata and chunks are cleaned up by an alarm. Idle browser polling is every 15 seconds; transfer polling is faster and slows when progress stops. Failed requests back off to 30 seconds. Direct negotiation is capped at three attempts per peer/page load; HTTPS remains usable afterwards. Leave old pages/session tabs closed when unused.
-- Workers Free currently allows 100,000 requests/day across the account. Durable Objects Free has its own request, execution, storage and SQL read/write quotas. If any quota is exhausted, the service can stop until the quota resets. This project does not purchase additional capacity. Other projects on the same account share quotas. Check usage during the university pilot.
-- Both devices must be online within the session. Sleeping phones, closed tabs, browser eviction, device failure, or manually clearing site data can prevent continuation. Save completed documents to permanent storage. IndexedDB is not a backup service.
-- A blocked UDP route or restricted NAT does not prevent the HTTPS path. If IT blocks the Worker HTTPS address, or the whole network is offline, application code cannot guarantee a connection. Check that the same origin's `/api/health` and authenticated room requests succeed from the campus desk. An IT-approved address is the dependable solution if that address is blocked.
-- Preview is restricted to verified PDF/images with a fixed MIME type. PDF uses the browser's native viewer; HTML, SVG and arbitrary text are never embedded as executable documents. DOCX is download-only and checked as a ZIP container. This is not an antivirus or a document-content scanner. Treat documents received from unknown people accordingly.
-- Names, filenames, sizes and connection metadata are visible to the host. End-to-end encryption protects document contents against passive relay access; a compromised site serving malicious JavaScript remains a threat.
-
-Cloudflare documentation: [Workers Free limits](https://developers.cloudflare.com/workers/platform/limits/), [Durable Object pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [Durable Object limits](https://developers.cloudflare.com/durable-objects/platform/limits/). Verify these before changing deployment scale or plan.
+Provider references: [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [Neon pricing](https://neon.com/pricing), [Vercel Analytics pricing](https://vercel.com/docs/analytics/limits-and-pricing).
 
 ## Source layout
 
-- `public/app.js`, `index.html`, `style.css`: sender/desk interface and session lifecycle.
-- `public/transfer.js`: persisted transfer queue, retry, acknowledgements and receipt.
-- `public/direct.js`: optional direct data channel and authenticated negotiation.
-- `public/storage.js`, `crypto.js`, `protocol.js`: browser storage, encryption and shared validation.
-- `server/worker.js`: same-origin API, desk ownership, approval, relay, quotas and expiry.
-- `tests/`: security/protocol checks and real browser recovery tests.
+- `public/app.js`, `index.html`, `style.css`: transfer interface and lifecycle.
+- `public/account.js`, `admin.html`, `admin.js`, `user-csv.js`: login and administration.
+- `public/transfer.js`, `direct.js`: persisted queue, receipts and optional direct connection.
+- `public/storage.js`, `crypto.js`, `protocol.js`: account storage, encryption and validation.
+- `server/worker.js`: protected API, approval, relay, limits and expiry.
+- `server/auth.js`, `auth-schema.sql`: authentication and database schema.
+- `tests/`: security, permissions and browser recovery checks.
 
-The old page used third-party public signaling and client-side role messages. The new service changes its protocol and cannot connect to an old page. Save needed documents from any existing old tabs **before closing or refreshing them**, then create new QR invitations. Legacy chat is not included in this document-handover release. The original implementation is available at Git commit `2fe23dea44b5ddce4ee27996dd0f3374e1d96248`.
+The root `index.html` is a migration landing page. GitHub Pages cannot run the new API. The original public-signaling protocol cannot connect to this version; save needed documents from old tabs before closing or refreshing them, then create new invitations. Legacy chat is not included. The original implementation is preserved at commit `2fe23dea44b5ddce4ee27996dd0f3374e1d96248`.

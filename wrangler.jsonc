@@ -3,6 +3,11 @@
   "account_id": "78856dd27887e361c07175196655d39e",
   "main": "server/worker.js",
   "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "BETTER_AUTH_URL": "https://uos-document-exchange.uos-document-exchange.workers.dev",
+    "FRONTEND_ORIGINS": "https://uos-document-exchange.vercel.app,https://uos-document-exchange-ahmadfayads-projects.vercel.app,https://uos-document-exchange-kaw2cnssh-ahmadfayads-projects.vercel.app,https://uos-document-exchange-bmht22dr4-ahmadfayads-projects.vercel.app",
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

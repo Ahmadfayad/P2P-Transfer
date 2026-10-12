@@ -14,8 +14,41 @@
         >↗ <span>Document Exchange<small>University of Sharjah</small></span></a
       ><span class="pill" id="network">Checking connection</span>
     </header>
+    <nav id="account-tools" hidden aria-label="Account">
+      <span id="account-name"></span
+      ><a id="admin-link" href="/admin.html" hidden>Manage users</a
+      ><button id="password-open" class="secondary compact" type="button">
+        Change password</button
+      ><button id="sign-out" class="secondary compact" type="button">
+        Sign out</button
+      ><span id="account-error" role="status"></span>
+    </nav>
     <main>
-      <section id="welcome" class="welcome">
+      <section id="login" class="card login-card">
+        <span class="eyebrow">Document Exchange</span>
+        <h1>Sign in</h1>
+        <p>Use the account provided by your administrator.</p>
+        <form id="login-form" method="post">
+          <label
+            >Email<input
+              name="email"
+              type="email"
+              required
+              autocomplete="username"
+              maxlength="254" /></label
+          ><label
+            >Password<input
+              name="password"
+              type="password"
+              required
+              minlength="6"
+              maxlength="128"
+              autocomplete="current-password" /></label
+          ><button type="submit" disabled>Sign in</button>
+          <p id="login-error" role="alert"></p>
+        </form>
+      </section>
+      <section id="welcome" class="welcome" hidden>
         <div>
           <span class="eyebrow">A simpler handover</span>
           <h1>Your documents.<br />A clear destination.</h1>
@@ -25,7 +58,7 @@
           </p>
           <div class="features">
             <span>✓ Encrypted files</span><span>✓ Automatic retry</span
-            ><span>✓ No account for students</span>
+            ><span>✓ Approved accounts</span>
           </div>
         </div>
         <div class="card" id="entry">
@@ -40,25 +73,23 @@
                 maxlength="64"
                 placeholder="Student services"
                 autocomplete="organization" /></label
-            ><label
-              >Desk access key<input
-                id="setup-key"
-                type="password"
-                required
-                minlength="16"
-                autocomplete="off" /></label
             ><button type="submit">Open desk <span>↗</span></button>
             <p class="small">
               Students: scan the desk’s QR code or open the link they share.
             </p>
           </form>
+          <p id="student-start" hidden>
+            Open the invitation link or scan the QR code from your desk to start
+            a transfer.
+          </p>
           <form id="join-form" hidden>
             <span class="eyebrow">For students</span>
             <h2>Connect to the desk</h2>
             <p>Your desk will approve you before any files are sent.</p>
             <label
-              >Your name or student ID<input
+              >Your account name<input
                 id="student-name"
+                readonly
                 required
                 maxlength="64"
                 autocomplete="off"
@@ -156,8 +187,44 @@
         <p>These files remain available even after a desk session ends.</p>
         <div id="saved-list"></div>
       </section>
+      <section class="card" id="legacy-recovery" hidden>
+        <h2>Earlier saved files</h2>
+        <p>
+          This browser has files from before account sign-in was added. Recover
+          them into your account only if they belong to you. The original
+          browser copy is retained.
+        </p>
+        <button id="recover-legacy" type="button" class="secondary">
+          Recover earlier files
+        </button>
+      </section>
       <div id="message" role="status" aria-live="polite" hidden></div>
     </main>
+    <dialog id="password-dialog">
+      <h2>Change password</h2>
+      <form id="password-form">
+        <label
+          >Current password<input
+            name="currentPassword"
+            type="password"
+            autocomplete="current-password"
+            required
+            maxlength="128" /></label
+        ><label
+          >New password<input
+            name="newPassword"
+            type="password"
+            autocomplete="new-password"
+            required
+            minlength="6"
+            maxlength="128" /></label
+        ><button type="submit">Save password</button
+        ><button id="password-close" type="button" class="secondary">
+          Close
+        </button>
+        <p id="password-error" role="status"></p>
+      </form>
+    </dialog>
     <footer>
       Document Exchange <span>Private by design. Free to use.</span>
     </footer>

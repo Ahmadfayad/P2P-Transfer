@@ -2,10 +2,8 @@ import { chromium } from "playwright";
 import assert from "node:assert/strict";
 import { readFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { login, cleanupAuthFixtures } from "./auth-helper.mjs";
 const base = process.env.TEST_URL || "http://127.0.0.1:8787";
-const setup =
-  process.env.DESK_SETUP_KEY ||
-  (await readFile(".dev.vars", "utf8")).trim().split("=")[1];
 const browser = await chromium.launch({
   headless: true,
   ...(process.env.CHROME_PATH
@@ -79,9 +77,10 @@ try {
     const { page: desk } = await client(direct),
       { page: student, ctx: studentContext } = await client(direct);
     await student.setViewportSize({ width: 390, height: 844 });
+    await login(desk, base);
+    await login(student, base, "student");
     await desk.goto(base);
     await desk.getByLabel("Desk name", { exact: true }).fill("Test desk");
-    await desk.getByLabel("Desk access key").fill(setup);
     await desk.getByRole("button", { name: "Open desk" }).click();
     await desk.getByRole("button", { name: "Copy invitation link" }).waitFor();
     const saved = await desk.evaluate(async () => {
@@ -108,9 +107,7 @@ try {
       }),
     );
     await student.goto(base + "/#" + new URLSearchParams(saved));
-    await student
-      .getByLabel("Your name or student ID")
-      .fill("Student " + (direct ? "direct" : "HTTPS"));
+    ownedRooms[ownedRooms.length - 1].request = desk.request;
     await student.getByRole("button", { name: "Request connection" }).click();
     await desk
       .getByRole("button", { name: "Approve", exact: true })
@@ -263,10 +260,12 @@ try {
   console.log("PASS no browser exceptions");
 } finally {
   for (const room of ownedRooms)
-    await fetch(base + "/api/rooms/" + room.room, {
-      method: "DELETE",
-      headers: { Authorization: "Bearer " + room.token },
-    }).catch(() => {});
+    await room.request
+      .delete(base + "/api/rooms/" + room.room, {
+        headers: { Authorization: "Bearer " + room.token },
+      })
+      .catch(() => {});
   for (const ctx of contexts) await ctx.close();
   await browser.close();
+  await cleanupAuthFixtures();
 }

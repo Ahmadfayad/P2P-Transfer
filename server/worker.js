@@ -8,6 +8,8 @@ import {
   publicKey,
   uuid,
 } from "../public/protocol.js";
+import { createAuth, permittedRole, publicAuthPaths } from "./auth.js";
+import { parseUsersCSV } from "../public/user-csv.js";
 
 const SESSION_MS = 8 * 60 * 60 * 1000;
 const MAX_BUFFER = 32 * 1024 * 1024;
@@ -86,17 +88,111 @@ export default {
     let response;
     if (url.pathname.startsWith("/api/")) {
       const origin = request.headers.get("Origin");
-      if (origin && origin !== url.origin)
+      if (
+        origin &&
+        origin !== url.origin &&
+        !(env.FRONTEND_ORIGINS || "").split(",").includes(origin)
+      )
         response = json(
           { error: "Cross-origin requests are not allowed." },
           403,
         );
       else if (url.pathname === "/api/health")
         response = json({ ok: true, protocol: 3 });
-      else
-        response = await env.HUB.get(env.HUB.idFromName("exchange")).fetch(
-          request,
-        );
+      else {
+        try {
+          const auth = createAuth(env);
+          if (url.pathname.startsWith("/api/auth/")) {
+            check(
+              publicAuthPaths.has(url.pathname.slice(9)) &&
+                ["GET", "POST"].includes(request.method),
+              404,
+              "Page not found.",
+            );
+            if (request.method === "POST") {
+              const body = await readBody(request, 8192);
+              if (url.pathname === "/api/auth/sign-in/email") {
+                let credentials;
+                try {
+                  credentials = JSON.parse(new TextDecoder().decode(body));
+                } catch {
+                  throw new HttpError(400, "Invalid request.");
+                }
+                check(
+                  typeof credentials?.email === "string" &&
+                    credentials.email.length <= 254,
+                  400,
+                  "Enter your email.",
+                );
+                const limit = await env.HUB.get(
+                  env.HUB.idFromName("exchange"),
+                ).fetch(
+                  new Request("https://internal/login-limit", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      email: credentials.email.trim().toLowerCase(),
+                    }),
+                  }),
+                );
+                if (!limit.ok)
+                  throw new HttpError(
+                    limit.status,
+                    "Too many sign-in attempts for this account. Please wait a minute.",
+                  );
+              }
+              request = new Request(request.url, {
+                method: request.method,
+                headers: request.headers,
+                body,
+              });
+            }
+            response = await auth.handler(request);
+          } else {
+            const account = await auth.api.getSession({
+              headers: request.headers,
+            });
+            check(
+              account?.user &&
+                !account.user.banned &&
+                permittedRole(account.user.role),
+              401,
+              "Please sign in.",
+            );
+            if (url.pathname.startsWith("/api/admin/"))
+              response = await administration(request, auth, account.user);
+            else {
+              if (url.pathname === "/api/rooms" && request.method === "POST")
+                check(
+                  ["admin", "staff"].includes(account.user.role),
+                  403,
+                  "Only staff can open a desk.",
+                );
+              const headers = new Headers(request.headers);
+              headers.set("X-Account-ID", account.user.id);
+              headers.set("X-Account-Role", account.user.role);
+              headers.set(
+                "X-Account-Name",
+                encodeURIComponent(account.user.name),
+              );
+              headers.delete("X-Setup-Key");
+              response = await env.HUB.get(
+                env.HUB.idFromName("exchange"),
+              ).fetch(new Request(request, { headers }));
+            }
+          }
+        } catch (error) {
+          const status = error.status || error.statusCode || 503;
+          response = json(
+            {
+              error:
+                status < 500
+                  ? error.body?.message || error.message
+                  : "Account service unavailable. Please try again.",
+            },
+            status,
+          );
+        }
+      }
     } else response = await env.ASSETS.fetch(request);
     const headers = new Headers(response.headers);
     headers.set("X-Content-Type-Options", "nosniff");
@@ -113,6 +209,116 @@ export default {
   },
 };
 
+async function administration(request, auth, user) {
+  check(user.role === "admin", 403, "Administrator access required.");
+  const url = new URL(request.url),
+    headers = request.headers;
+  if (url.pathname === "/api/admin/users" && request.method === "GET") {
+    const offset = Number(url.searchParams.get("offset") || 0);
+    check(Number.isSafeInteger(offset) && offset >= 0, 400, "Invalid page.");
+    return json(
+      await auth.api.listUsers({
+        headers,
+        query: {
+          limit: 50,
+          offset,
+          sortBy: "createdAt",
+          sortDirection: "desc",
+        },
+      }),
+    );
+  }
+  check(request.method === "POST", 404, "Page not found.");
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder().decode(await readBody(request, 8192)));
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, "Invalid request.");
+  }
+  check(
+    body && typeof body === "object" && !Array.isArray(body),
+    400,
+    "Invalid request.",
+  );
+  if (url.pathname === "/api/admin/users") {
+    // Reuse the CSV validation at the server boundary, including the six-character minimum.
+    const values = [body.email, body.name, body.role, body.password];
+    check(
+      values.every((v) => typeof v === "string"),
+      400,
+      "Enter email, name, role and password.",
+    );
+    const csv = values
+      .map((v) => '"' + v.replaceAll('"', '""') + '"')
+      .join(",");
+    let imported;
+    try {
+      [imported] = parseUsersCSV("email,name,role,password\n" + csv);
+    } catch (error) {
+      throw new HttpError(400, error.message);
+    }
+    const result = await auth.api.createUser({ headers, body: imported });
+    return json({ user: result.user }, 201);
+  }
+  check(
+    typeof body.userId === "string" && body.userId.length <= 128,
+    400,
+    "Invalid user.",
+  );
+  const target = await auth.api.getUser({
+    headers,
+    query: { id: body.userId },
+  });
+  check(
+    target?.role !== "admin" && body.userId !== user.id,
+    403,
+    "Administrator accounts cannot be changed here.",
+  );
+  if (url.pathname === "/api/admin/role") {
+    check(permittedRole(body.role), 400, "Invalid role.");
+    return json(
+      await auth.api.setRole({
+        headers,
+        body: { userId: body.userId, role: body.role },
+      }),
+    );
+  }
+  if (url.pathname === "/api/admin/status") {
+    check(typeof body.disabled === "boolean", 400, "Invalid status.");
+    return json(
+      body.disabled
+        ? await auth.api.banUser({
+            headers,
+            body: {
+              userId: body.userId,
+              banReason: "Disabled by administrator",
+            },
+          })
+        : await auth.api.unbanUser({ headers, body: { userId: body.userId } }),
+    );
+  }
+  if (url.pathname === "/api/admin/password") {
+    check(
+      typeof body.password === "string" &&
+        body.password.length >= 6 &&
+        body.password.length <= 128,
+      400,
+      "Password must contain 6 to 128 characters.",
+    );
+    await auth.api.setUserPassword({
+      headers,
+      body: { userId: body.userId, newPassword: body.password },
+    });
+    await auth.api.revokeUserSessions({
+      headers,
+      body: { userId: body.userId },
+    });
+    return json({ ok: true });
+  }
+  throw new HttpError(404, "Page not found.");
+}
+
 export class TransferHub {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -125,6 +331,7 @@ export class TransferHub {
       CREATE TABLE IF NOT EXISTS chunks (transfer TEXT NOT NULL, idx INTEGER NOT NULL, body BLOB NOT NULL, PRIMARY KEY(transfer, idx));
       CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, payload TEXT NOT NULL, created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS limits (id TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS account_bindings (room TEXT NOT NULL, peer TEXT NOT NULL, account TEXT NOT NULL, PRIMARY KEY(room, peer));
       CREATE INDEX IF NOT EXISTS peers_room ON peers(room);
       CREATE INDEX IF NOT EXISTS peers_token ON peers(room, token);
       CREATE INDEX IF NOT EXISTS transfers_room ON transfers(room);
@@ -159,6 +366,9 @@ export class TransferHub {
       now,
     );
     this.sql.exec("DELETE FROM rooms WHERE expires <= ?", now);
+    this.sql.exec(
+      "DELETE FROM account_bindings WHERE room NOT IN (SELECT id FROM rooms)",
+    );
     this.sql.exec("DELETE FROM limits WHERE expires <= ?", now);
   }
   async alarm() {
@@ -166,7 +376,7 @@ export class TransferHub {
     if (this.one("SELECT count(*) AS n FROM rooms").n)
       await this.ctx.storage.setAlarm(Date.now() + 60 * 60 * 1000);
   }
-  rate(id, max) {
+  rate(id, max, period = 60 * 60 * 1000) {
     const found = this.one("SELECT * FROM limits WHERE id = ?", id);
     const count = found && found.expires > Date.now() ? found.count : 0;
     check(count < max, 429, "Too many attempts. Please try again later.");
@@ -174,9 +384,7 @@ export class TransferHub {
       "INSERT OR REPLACE INTO limits VALUES (?, ?, ?)",
       id,
       count + 1,
-      found && found.expires > Date.now()
-        ? found.expires
-        : Date.now() + 60 * 60 * 1000,
+      found && found.expires > Date.now() ? found.expires : Date.now() + period,
     );
   }
   approved(room, peer) {
@@ -239,23 +447,28 @@ export class TransferHub {
         "Invalid request.",
       );
     }
+    if (method === "POST" && url.pathname === "/login-limit") {
+      check(
+        typeof body.email === "string" && body.email.length <= 254,
+        400,
+        "Invalid email.",
+      );
+      this.rate("login:" + (await hash(body.email)), 10, 60000);
+      this.sql.exec("DELETE FROM limits WHERE expires <= ?", Date.now());
+      return json({ ok: true });
+    }
     if (method === "POST" && url.pathname === "/api/rooms") {
       this.cleanup();
       check(
-        this.env.DESK_SETUP_KEY && this.env.DESK_SETUP_KEY.length >= 16,
-        503,
-        "Desk access has not been configured.",
+        request.headers.get("X-Account-ID") &&
+          ["admin", "staff"].includes(request.headers.get("X-Account-Role")),
+        403,
+        "Only signed-in staff can open a desk.",
       );
       this.rate(
         "setup:" +
           (await hash(request.headers.get("CF-Connecting-IP") || "local")),
         20,
-      );
-      check(
-        (await hash(request.headers.get("X-Setup-Key") || "")) ===
-          (await hash(this.env.DESK_SETUP_KEY)),
-        403,
-        "Incorrect desk access key.",
       );
       check(
         label(body.name) && validKey(body.publicKey),
@@ -284,6 +497,12 @@ export class TransferHub {
         expires,
       );
       await this.ctx.storage.setAlarm(Date.now() + 60 * 60 * 1000);
+      this.sql.exec(
+        "INSERT INTO account_bindings VALUES (?, ?, ?)",
+        id,
+        "desk",
+        request.headers.get("X-Account-ID"),
+      );
       return json({ id, token: owner, invite, expires }, 201);
     }
     check(
@@ -304,6 +523,9 @@ export class TransferHub {
       "This desk session has ended. Ask for a new desk link.",
     );
     if (method === "POST" && segments[3] === "join" && segments.length === 4) {
+      if (request.headers.has("X-Account-Name"))
+        body.name = decodeURIComponent(request.headers.get("X-Account-Name"));
+      check(request.headers.get("X-Account-ID"), 401, "Please sign in.");
       this.rate(
         "join:" +
           roomId +
@@ -343,6 +565,12 @@ export class TransferHub {
         "pending",
         Date.now(),
       );
+      this.sql.exec(
+        "INSERT INTO account_bindings VALUES (?, ?, ?)",
+        roomId,
+        id,
+        request.headers.get("X-Account-ID"),
+      );
       return json(
         {
           id,
@@ -369,6 +597,35 @@ export class TransferHub {
       );
       who = peer.id;
     }
+    if (who === "desk")
+      check(
+        ["admin", "staff"].includes(request.headers.get("X-Account-Role")),
+        403,
+        "Only staff can use this desk.",
+      );
+    const binding = this.one(
+      "SELECT account FROM account_bindings WHERE room = ? AND peer = ?",
+      roomId,
+      who,
+    );
+    // A valid private room token can claim a pre-login session once; new sessions are bound at creation.
+    if (!binding && request.headers.get("X-Account-ID"))
+      this.sql.exec(
+        "INSERT INTO account_bindings VALUES (?, ?, ?)",
+        roomId,
+        who,
+        request.headers.get("X-Account-ID"),
+      );
+    check(
+      (binding?.account ||
+        this.one(
+          "SELECT account FROM account_bindings WHERE room = ? AND peer = ?",
+          roomId,
+          who,
+        )?.account) === request.headers.get("X-Account-ID"),
+      403,
+      "This desk session belongs to another account. Open a new session.",
+    );
     if (method === "GET" && segments[3] === "state" && segments.length === 4) {
       const since = Number(url.searchParams.get("since") || 0);
       check(

@@ -73,15 +73,19 @@ function service() {
     },
   };
   return {
-    hub: new TransferHub(ctx, {
-      DESK_SETUP_KEY: "test-setup-key-at-least-sixteen",
-    }),
+    hub: new TransferHub(ctx, {}),
     database,
   };
 }
 test("authenticated relay rejects impersonation, supports retry and requires recipient receipt", async () => {
   const { hub, database } = service();
   const api = async (path, method = "GET", body, token, headers = {}) => {
+    if (path !== "/rooms")
+      headers = {
+        "X-Account-ID": "test-account",
+        "X-Account-Role": "staff",
+        ...headers,
+      };
     if (token) headers.Authorization = "Bearer " + token;
     return hub.fetch(
       new Request("https://example.test/api" + path, {
@@ -109,17 +113,48 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
         "POST",
         { name: "Desk", publicKey: invalidKey },
         null,
-        { "X-Setup-Key": "test-setup-key-at-least-sixteen" },
+        { "X-Account-ID": "test-account", "X-Account-Role": "staff" },
       )
     ).status,
     400,
   );
   const room = await (
     await api("/rooms", "POST", { name: "Desk", publicKey: key }, null, {
-      "X-Setup-Key": "test-setup-key-at-least-sixteen",
+      "X-Account-ID": "test-account",
+      "X-Account-Role": "staff",
     })
   ).json();
   const base = "/rooms/" + room.id;
+  assert.equal(
+    (
+      await api(base + "/state", "GET", undefined, room.token, {
+        "X-Account-ID": "another-account",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await api("/rooms", "POST", { name: "Desk", publicKey: key }, null, {
+        "X-Account-ID": "student",
+        "X-Account-Role": "student",
+      })
+    ).status,
+    403,
+  );
+  database.prepare("DELETE FROM account_bindings WHERE room = ?").run(room.id);
+  assert.equal(
+    (await api(base + "/state", "GET", undefined, room.token)).status,
+    200,
+  );
+  assert.equal(
+    (
+      await api(base + "/state", "GET", undefined, room.token, {
+        "X-Account-ID": "another-account",
+      })
+    ).status,
+    403,
+  );
   const join = async (name) =>
     (
       await api(base + "/join", "POST", { name, publicKey: key }, null, {
@@ -328,7 +363,11 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
     (
       await hub2.fetch(
         new Request("https://example.test/api" + base + "/state", {
-          headers: { Authorization: "Bearer " + room.token },
+          headers: {
+            Authorization: "Bearer " + room.token,
+            "X-Account-ID": "test-account",
+            "X-Account-Role": "staff",
+          },
         }),
       )
     ).status,

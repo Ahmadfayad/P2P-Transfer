@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Manage users · Document Exchange</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/admin.js"></script>
+  </head>
+  <body>
+    <header><a class="brand" href="/">↗ Document Exchange</a></header>
+    <nav id="account-tools" hidden aria-label="Account">
+      <span id="account-name"></span><a href="/">Transfers</a
+      ><a id="admin-link" href="/admin.html" hidden>Manage users</a
+      ><button id="password-open" class="secondary compact" type="button">
+        Change password</button
+      ><button id="sign-out" class="secondary compact" type="button">
+        Sign out</button
+      ><span id="account-error" role="status"></span>
+    </nav>
+    <main class="admin-layout">
+      <section id="login" class="card login-card">
+        <h1>Sign in</h1>
+        <p>Use the account provided by your administrator.</p>
+        <form id="login-form" method="post">
+          <label
+            >Email<input
+              name="email"
+              type="email"
+              autocomplete="username"
+              required
+              maxlength="254" /></label
+          ><label
+            >Password<input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              minlength="6"
+              maxlength="128" /></label
+          ><button type="submit" disabled>Sign in</button>
+          <p id="login-error" role="alert"></p>
+        </form>
+      </section>
+      <p id="denied" hidden>
+        Administrator access required. <a href="/">Return to transfers</a>.
+      </p>
+      <div id="administration" hidden>
+        <section class="card">
+          <span class="eyebrow">Administrator</span>
+          <h1>Manage users</h1>
+          <p>
+            Admins manage accounts. Staff open desks. Students join invited
+            desks. Public registration is disabled.
+          </p>
+          <h2>Import users</h2>
+          <p>
+            Upload a CSV with <strong>email,name,role,password</strong>. Roles:
+            admin, staff or student. Passwords: 6–128 characters. Maximum 200
+            rows. Existing accounts are reported and kept unchanged.
+          </p>
+          <p>
+            <a href="/users-template.csv" download>Download CSV template</a>
+          </p>
+          <label
+            >Users CSV<input id="csv-file" type="file" accept=".csv,text/csv"
+          /></label>
+          <p id="csv-summary" role="status"></p>
+          <div class="table-scroll">
+            <table id="csv-preview" hidden>
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Name</th>
+                  <th>Role</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <button id="import-users" type="button" disabled>Import users</button>
+          <p id="import-result" role="status"></p>
+          <ul id="import-errors"></ul>
+          <p class="small">
+            Share passwords privately. Users can change them after signing in.
+            Keep the CSV private and remove your copy when finished.
+          </p>
+        </section>
+        <section class="card">
+          <div class="section-heading">
+            <h2>Accounts</h2>
+            <button id="refresh-users" class="secondary" type="button">
+              Refresh
+            </button>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="users"></tbody>
+            </table>
+          </div>
+          <div class="admin-actions">
+            <button id="previous-page" class="secondary" type="button">
+              Previous</button
+            ><span id="user-count"></span
+            ><button id="next-page" class="secondary" type="button">
+              Next
+            </button>
+          </div>
+          <p id="admin-error" role="alert"></p>
+        </section>
+      </div>
+    </main>
+    <dialog id="reset-dialog">
+      <h2>Reset user password</h2>
+      <p id="reset-user"></p>
+      <form id="reset-form">
+        <label
+          >New password<input
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            required
+            minlength="6"
+            maxlength="128" /></label
+        ><button type="submit">Reset password</button
+        ><button id="reset-close" type="button" class="secondary">Close</button>
+        <p id="reset-error" role="status"></p>
+      </form>
+    </dialog>
+    <dialog id="password-dialog">
+      <h2>Change password</h2>
+      <form id="password-form">
+        <label
+          >Current password<input
+            name="currentPassword"
+            type="password"
+            autocomplete="current-password"
+            required
+            maxlength="128" /></label
+        ><label
+          >New password<input
+            name="newPassword"
+            type="password"
+            autocomplete="new-password"
+            required
+            minlength="6"
+            maxlength="128" /></label
+        ><button type="submit">Save password</button
+        ><button id="password-close" type="button" class="secondary">
+          Close
+        </button>
+        <p id="password-error" role="status"></p>
+      </form>
+    </dialog>
+  </body>
+</html>
