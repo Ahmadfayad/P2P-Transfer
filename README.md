@@ -30,6 +30,8 @@ A failed file retries independently with backoff and shows its error beside that
 
 The sender fills the existing four-chunk relay window concurrently and avoids re-uploading stored chunks. The receiver drains that window without requesting room state between every chunk, saving and acknowledging each chunk in order. Optional WebRTC signaling does not delay HTTPS; a failed connection or unacknowledged direct packet switches that peer to HTTPS for the rest of that connection.
 
+The Open Relay pilot adds immediate authenticated WebSocket wake hints and acknowledgements in saved batches of up to four chunks. HTTP polling remains available. TURN is disabled until a private, expiring Free credential is configured; only approved peers can fetch it. See [the pilot setup and limits](docs/TURN-PILOT.md). Cloudflare still serves the API and recovery path during this pilot; no provider migration or paid upgrade is automatic.
+
 Files and encryption keys are separated by account in the browser. Sign-out hides them, and another person's login cannot display them. **Recover earlier files** can claim this browser's files from before sign-in into one account, retaining the original copy. Valid old room credentials can be bound to that account once. Recover only files belonging to you. Browser storage is not a backup.
 
 ## Implementation

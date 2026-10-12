@@ -22,6 +22,8 @@ const diagnosticRoutes = [
   "/api/rooms/:room",
   "/api/rooms/:room/state",
   "/api/rooms/:room/diagnostics",
+  "/api/rooms/:room/wake",
+  "/api/rooms/:room/ice",
   "/api/rooms/:room/peers/:peer",
   "/api/rooms/:room/events",
   "/api/rooms/:room/transfers",

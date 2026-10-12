@@ -29,6 +29,8 @@ const eventNames = new Set([
   "connection-retry",
   "transfer-retry",
   "send-chunk",
+  "push-open",
+  "push-closed",
   "webrtc-connectionstatechange",
   "webrtc-iceconnectionstatechange",
   "webrtc-icegatheringstatechange",
@@ -164,7 +166,7 @@ if (typeof window !== "undefined") {
         session.server = session.server.map(diagnosticRecord);
       const report = {
         format: 2,
-        appVersion: "reliable-diagnostics-v2",
+        appVersion: "turn-pilot-v1",
         host: location.host,
         exportedAt: new Date().toISOString(),
         network: panel.querySelector("select").value,

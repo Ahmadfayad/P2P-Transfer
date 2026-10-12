@@ -12,6 +12,7 @@ import {
 } from "../public/protocol.js";
 import { createAuth, permittedRole, publicAuthPaths } from "./auth.js";
 import { parseUsersCSV } from "../public/user-csv.js";
+import { turnPilot } from "./turn.js";
 
 const SESSION_MS = 8 * 60 * 60 * 1000;
 const MAX_BUFFER = 32 * 1024 * 1024;
@@ -91,6 +92,17 @@ export default {
     const incoming = new Headers(request.headers);
     incoming.set("X-Request-ID", requestId);
     request = new Request(request, { headers: incoming });
+    const wakeUpgrade = request.method === "GET" &&
+      /^\/api\/rooms\/[0-9a-f-]{36}\/wake$/.test(url.pathname) &&
+      request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+    const protocols = (request.headers.get("Sec-WebSocket-Protocol") || "").split(",").map((v) => v.trim());
+    if (wakeUpgrade && protocols.length === 2 &&
+        ["uos-staff-v1", "uos-guest-v1"].includes(protocols[0]) && /^[a-f0-9]{64}$/.test(protocols[1])) {
+      const headers = new Headers(request.headers);
+      headers.set("Authorization", "Bearer " + protocols[1]);
+      headers.set("X-Guest-Access", protocols[0] === "uos-guest-v1" ? "1" : "0");
+      request = new Request(request, { headers });
+    }
     let response;
     if (url.pathname.startsWith("/api/")) {
       const origin = request.headers.get("Origin");
@@ -242,7 +254,7 @@ export default {
       );
     const headers = new Headers(response.headers);
     headers.set("X-Request-ID", requestId);
-    headers.set("X-App-Version", "reliable-diagnostics-v2");
+    headers.set("X-App-Version", "turn-pilot-v1");
     if (
       url.pathname.startsWith("/api/") &&
       response.status >= 400 &&
@@ -270,8 +282,9 @@ export default {
     );
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
     );
+    if (response.status === 101) return new Response(null, { status: 101, headers, webSocket: response.webSocket });
     return new Response(response.body, { status: response.status, headers });
   },
 };
@@ -400,6 +413,7 @@ export class TransferHub {
       CREATE TABLE IF NOT EXISTS limits (id TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS account_bindings (room TEXT NOT NULL, peer TEXT NOT NULL, account TEXT NOT NULL, PRIMARY KEY(room, peer));
       CREATE TABLE IF NOT EXISTS diagnostics (id INTEGER PRIMARY KEY AUTOINCREMENT, time INTEGER NOT NULL, room TEXT, request_id TEXT, method TEXT, route TEXT, status INTEGER, duration INTEGER);
+      CREATE TABLE IF NOT EXISTS turn_transfers (id TEXT PRIMARY KEY, room TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS peers_room ON peers(room);
       CREATE INDEX IF NOT EXISTS peers_token ON peers(room, token);
       CREATE INDEX IF NOT EXISTS transfers_room ON transfers(room);
@@ -417,8 +431,26 @@ export class TransferHub {
   diagnosticRecords(query, ...args) {
     return this.rows(query, ...args).map(diagnosticRecord);
   }
+  notify(roomId, targets) {
+    const room = this.one("SELECT expires FROM rooms WHERE id = ?", roomId);
+    for (const ws of this.ctx.getWebSockets?.("room:" + roomId) || []) {
+      try {
+        const info = ws.deserializeAttachment();
+        const active = room?.expires > Date.now() && info.expires > Date.now();
+        if (!active) { ws.close(1000, "Session changed"); continue; }
+        if (!targets || targets.includes(info.who)) ws.send("changed");
+        if (info.who !== "desk" &&
+            this.one("SELECT state FROM peers WHERE id = ? AND room = ?", info.who, roomId)?.state === "declined")
+          ws.close(1000, "Session changed");
+      } catch { /* A closed notification socket cannot block a saved transfer. */ }
+    }
+  }
+  webSocketMessage(ws) { ws.close(1008, "Notifications only"); }
+  webSocketClose(ws) { ws.close(1000, "Closed"); }
+  webSocketError(ws) { ws.close(1011, "Unavailable"); }
   cleanup() {
     const now = Date.now();
+    this.sql.exec("DELETE FROM turn_transfers WHERE expires <= ? OR room NOT IN (SELECT id FROM rooms WHERE expires > ?)", now, now);
     this.sql.exec(
       "DELETE FROM chunks WHERE transfer IN (SELECT id FROM transfers WHERE room IN (SELECT id FROM rooms WHERE expires <= ?))",
       now,
@@ -737,6 +769,7 @@ export class TransferHub {
           ? "guest:" + id
           : request.headers.get("X-Account-ID"),
       );
+      this.notify(roomId, ["desk"]);
       return json(
         {
           id,
@@ -795,6 +828,28 @@ export class TransferHub {
       403,
       "This desk session belongs to another account. Open a new session.",
     );
+    if (method === "GET" && segments[3] === "wake" && segments.length === 4) {
+      const protocols = (request.headers.get("Sec-WebSocket-Protocol") || "").split(",").map((v) => v.trim());
+      const protocol = who === "desk" ? "uos-staff-v1" : "uos-guest-v1";
+      check(request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
+        protocols.length === 2 && protocols[0] === protocol && /^[a-f0-9]{64}$/.test(protocols[1]), 400, "Invalid notification connection.");
+      check(!peer || peer.state !== "declined", 403, "This connection has ended.");
+      check(this.ctx.acceptWebSocket && typeof WebSocketPair !== "undefined", 503, "Notifications unavailable.");
+      this.rate("wake:" + roomId + ":" + who, 60);
+      const tag = "peer:" + roomId + ":" + who;
+      const previous = this.ctx.getWebSockets(tag);
+      if (previous.length >= 2) previous[0].close(1000, "Connection replaced");
+      const pair = new WebSocketPair();
+      this.ctx.acceptWebSocket(pair[1], ["room:" + roomId, tag]);
+      pair[1].serializeAttachment({ room: roomId, who, expires: Math.min(room.expires, Date.now() + 600000) });
+      return new Response(null, { status: 101, webSocket: pair[0], headers: { "Sec-WebSocket-Protocol": protocol } });
+    }
+    if (method === "GET" && segments[3] === "ice" && segments.length === 4) {
+      check(this.approved(roomId, who), 403, "Wait for desk approval.");
+      this.rate("ice:" + roomId + ":" + who, 12);
+      const pilot = turnPilot(this.env);
+      return json(pilot ? { enabled: true, iceServers: pilot.iceServers, expires: pilot.expires, iceTransportPolicy: "relay" } : { enabled: false });
+    }
     if (
       method === "GET" &&
       segments[3] === "diagnostics" &&
@@ -856,6 +911,8 @@ export class TransferHub {
         who,
         since,
       );
+      const pilot = turnPilot(this.env);
+      const allowed = new Set(pilot ? this.rows("SELECT id FROM turn_transfers WHERE room = ? AND expires > ?", roomId, Date.now()).map((r) => r.id) : []);
       return json({
         room: {
           id: roomId,
@@ -864,6 +921,7 @@ export class TransferHub {
           publicKey: JSON.parse(room.public_key),
         },
         self: who,
+        batchAcks: true,
         peers: peers.map((p) => ({
           id: p.id,
           name: p.name,
@@ -871,7 +929,8 @@ export class TransferHub {
           state: p.state,
           seen: p.seen,
         })),
-        transfers,
+        transfers: transfers.map((t) => ({ ...t, turnAllowed: allowed.has(t.id) })),
+        turnEnabled: Boolean(pilot),
         events: events.map((e) => ({
           id: e.id,
           from: e.sender,
@@ -882,12 +941,14 @@ export class TransferHub {
     if (method === "POST" && segments[3] === "leave" && segments.length === 4) {
       check(who !== "desk", 403, "Only a visitor can leave this connection.");
       this.declinePeer(roomId, who, "The visitor left this connection.");
+      this.notify(roomId, ["desk", who]);
       return json({ left: true });
     }
     if (method === "DELETE" && segments.length === 3) {
       check(who === "desk", 403, "Only the desk can end a session.");
       this.sql.exec("UPDATE rooms SET expires = 0 WHERE id = ?", roomId);
       this.cleanup();
+      this.notify(roomId);
       return json({ ended: true });
     }
     if (method === "POST" && segments[3] === "peers" && segments.length === 5) {
@@ -921,6 +982,7 @@ export class TransferHub {
           roomId,
           segments[4],
         );
+      this.notify(roomId, ["desk", segments[4]]);
       return json({ state: body.state });
     }
     if (
@@ -986,6 +1048,7 @@ export class TransferHub {
         JSON.stringify({ kind: body.kind, data: body.data }),
         Date.now(),
       );
+      this.notify(roomId, [target]);
       return json({ queued: true }, 201);
     }
     if (
@@ -1042,6 +1105,19 @@ export class TransferHub {
         "offered",
         Date.now(),
       );
+      const pilot = turnPilot(this.env);
+      if (pilot) {
+        // Reserve conservatively for both directions/retries; never expand the free pilot silently.
+        const budgetId = "turn-bytes:" + new Date().toISOString().slice(0, 7);
+        const budget = this.one("SELECT count, expires FROM limits WHERE id = ?", budgetId);
+        const used = budget?.expires > Date.now() ? budget.count : 0;
+        if (used + body.size * 4 <= pilot.maxBytes) {
+          this.sql.exec("INSERT OR REPLACE INTO limits VALUES (?, ?, ?)", budgetId, used + body.size * 4,
+            Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1));
+          this.sql.exec("INSERT INTO turn_transfers VALUES (?, ?, ?)", body.id, roomId, pilot.expires);
+        }
+      }
+      this.notify(roomId, [to]);
       return json({ id: body.id }, 201);
     }
     check(
@@ -1062,6 +1138,7 @@ export class TransferHub {
         "UPDATE transfers SET state = 'accepted' WHERE id = ?",
         t.id,
       );
+      this.notify(roomId, [t.sender]);
       return json({ accepted: true });
     }
     if (method === "POST" && action === "reject" && segments.length === 6) {
@@ -1078,6 +1155,7 @@ export class TransferHub {
         t.id,
       );
       this.sql.exec("DELETE FROM chunks WHERE transfer = ?", t.id);
+      this.notify(roomId, [t.sender, t.recipient]);
       return json({ rejected: true });
     }
     if (action === "chunks" && segments.length === 7) {
@@ -1124,6 +1202,7 @@ export class TransferHub {
           index,
           bytes.buffer,
         );
+        this.notify(roomId, [t.recipient]);
         return json({ stored: true }, 201);
       }
       if (method === "GET") {
@@ -1160,7 +1239,7 @@ export class TransferHub {
         Number.isInteger(body.next) &&
           body.next >= 0 &&
           body.next <= total &&
-          body.next <= t.next + 1,
+          body.next <= t.next + (body.batch === true ? WINDOW_SIZE : 1),
         400,
         "Acknowledge chunks in order.",
       );
@@ -1176,6 +1255,7 @@ export class TransferHub {
           body.next,
         );
       }
+      if (body.next > t.next) this.notify(roomId, [t.sender]);
       return json({ next: Math.max(t.next, body.next) });
     }
     if (method === "POST" && action === "complete" && segments.length === 6) {
@@ -1197,6 +1277,7 @@ export class TransferHub {
         t.id,
       );
       this.sql.exec("DELETE FROM chunks WHERE transfer = ?", t.id);
+      this.notify(roomId, [t.sender, t.recipient]);
       return json({ received: true });
     }
     throw new HttpError(404, "Page not found.");

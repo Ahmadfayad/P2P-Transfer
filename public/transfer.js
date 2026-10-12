@@ -12,6 +12,7 @@ import * as db from "./storage.js";
 import { shared, encrypt, decrypt, fingerprint } from "./crypto.js";
 import { Direct } from "./direct.js";
 import { trackedFetch, record } from "./diagnostics.js";
+import { Wake } from "./wake.js";
 
 export async function request(
   path,
@@ -73,7 +74,7 @@ export async function finishFile(file) {
   });
 }
 export class Exchange {
-  constructor(session, changed) {
+  constructor(session, changed, wake = () => {}) {
     this.session = session;
     this.changed = changed;
     this.cursor = 0;
@@ -81,6 +82,8 @@ export class Exchange {
     this.sent = new Map();
     this.retries = new Map();
     this.stopped = false;
+    this.wake = wake;
+    this.signals = new Map();
     this.direct = new Direct(
       session,
       (to, data) =>
@@ -88,9 +91,11 @@ export class Exchange {
           method: "POST",
           body: { to, kind: "signal", data },
         }),
-      () => this.changed(this.state),
+      () => { this.changed(this.state); this.wake(); },
+      async () => (await this.api("/ice", { signal: AbortSignal.timeout(8000) })).json(),
     );
   }
+  watch() { this.notifications ||= new Wake(this.session, () => { if (!this.stopped) this.wake(); }); }
   api(path, options = {}) {
     return request("/rooms/" + this.session.room + path, {
       ...options,
@@ -187,13 +192,18 @@ export class Exchange {
     );
     this.direct.retain(approved);
     for (const event of state.events) {
-      if (event.kind === "signal" && approved.has(event.from))
-        await this.direct.signal(event.from, event.data).catch(() => {});
+      if (event.kind === "signal" && approved.has(event.from)) {
+        const pending = (this.signals.get(event.from) || Promise.resolve()).then(() => {
+          if (!this.stopped && this.direct.allowed?.has(event.from))
+            return this.direct.signal(event.from, event.data);
+        }).catch(() => {});
+        this.signals.set(event.from, pending);
+      }
       this.cursor = event.id;
     }
     if (this.session.self === "desk")
       for (const peer of state.peers.filter((p) => p.state === "approved"))
-        await this.direct.start(peer.id).catch(() => {});
+        this.direct.start(peer.id).catch(() => {});
     if (this.session.self !== "desk" && own?.state !== "approved") {
       this.changed(state);
       return false;
@@ -283,7 +293,7 @@ export class Exchange {
           );
           chunk = { bytes, time: Date.now() };
           window.set(index, chunk);
-          chunk.direct = this.direct.upload(t.to, t.id, index, bytes);
+          chunk.direct = (!this.direct.pilot || t.turnAllowed) && this.direct.upload(t.to, t.id, index, bytes);
         } else if (chunk.direct) {
           // A channel can remain open after ICE fails. Stop paying this delay for every chunk.
           this.direct.fallback(t.to);
@@ -337,13 +347,16 @@ export class Exchange {
       throw new Error(
         "Saved chunks are missing. Keep this page open and ask the sender to resend.",
       );
-    if (file.next > t.next) {
+    const batch = state.batchAcks === true;
+    while (file.next > t.next) {
+      const next = Math.min(file.next, t.next + (batch ? WINDOW_SIZE : 1));
       await this.api("/transfers/" + t.id + "/ack", {
         method: "POST",
-        body: { next: t.next + 1 },
+        body: { next, ...(batch ? { batch: true } : {}) },
       });
-      t.next++;
+      t.next = next;
     }
+    const acknowledged = t.next;
     // Drain only the existing relay window, saving each chunk before its ordered ACK.
     for (let drained = 0; file.next < total && drained < WINDOW_SIZE; drained++) {
       let bytes = this.direct.take(t.from, t.id, t.next);
@@ -351,7 +364,7 @@ export class Exchange {
         const response = await this.api(
           "/transfers/" + t.id + "/chunks/" + t.next,
         );
-        if (response.status === 204) return;
+        if (response.status === 204) break;
         bytes = new Uint8Array(await response.arrayBuffer());
       }
       let plain;
@@ -382,11 +395,16 @@ export class Exchange {
         });
         s.files.put(file);
       });
+      t.next = file.next;
+      if (!batch) await this.api("/transfers/" + t.id + "/ack", {
+        method: "POST", body: { next: file.next },
+      });
+    }
+    if (batch && t.next > acknowledged) {
       await this.api("/transfers/" + t.id + "/ack", {
         method: "POST",
-        body: { next: file.next },
+        body: { next: file.next, batch: true },
       });
-      t.next = file.next;
     }
     if (file.next < total) return;
     await finishFile(file);
@@ -398,5 +416,6 @@ export class Exchange {
   stop() {
     this.stopped = true;
     this.direct.close();
+    this.notifications?.close();
   }
 }

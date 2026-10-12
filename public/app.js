@@ -526,7 +526,7 @@ function renderState(state) {
   $("route-label").textContent = [...exchange.direct.peers.keys()].some(
     (peer) => exchange.direct.available(peer),
   )
-    ? "Direct + HTTPS recovery"
+    ? exchange.direct.pilot ? "Encrypted relay + HTTPS recovery" : "Direct + HTTPS recovery"
     : "Encrypted HTTPS";
   renderFiles().catch((e) => message(e.message));
 }
@@ -608,9 +608,16 @@ async function begin(saved) {
   await db.put("sessions", saved);
   sessionStorage.setItem(sessionKey, saved.id);
   localStorage.setItem(sessionKey, saved.id);
-  exchange = new Exchange(session, (state) => {
-    if (exchange?.session === saved) renderState(state);
+  const instance = new Exchange(session, (state) => {
+    if (exchange === instance) renderState(state);
+  }, () => {
+    if (exchange !== instance || instance.stopped) return;
+    instance.wakeRequested = true;
+    clearTimeout(timer);
+    if (!instance.polling) timer = setTimeout(() => poll(instance), 25);
   });
+  exchange = instance;
+  instance.watch();
   $("welcome").hidden = true;
   $("workspace").hidden = guest;
   const desk = session.self === "desk";

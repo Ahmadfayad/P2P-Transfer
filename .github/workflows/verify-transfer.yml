@@ -33,6 +33,8 @@ jobs:
       - run: npm run test:reliability
       - name: Verify Cloudflare Worker bundle without deployment
         run: npx wrangler deploy --dry-run --outdir worker-build
+      - name: Verify native Worker notification sockets
+        run: node tests/native-sockets.mjs
       - name: Retain verified bundle briefly for deployment
         uses: actions/upload-artifact@v7
         with:

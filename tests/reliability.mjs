@@ -5,10 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
 import { TransferHub } from "../server/worker.js";
+import { WebSocketServer } from "ws";
 
 const database = new DatabaseSync(":memory:");
+const sockets = new Set();
 const hub = new TransferHub(
   {
+    getWebSockets: (tag) => [...sockets].filter((ws) => ws.readyState === 1 && (!tag || ws.tags.includes(tag))),
     storage: {
       setAlarm: async () => {},
       sql: {
@@ -88,6 +91,29 @@ const server = createServer(async (req, res) => {
     res.writeHead(500);
     res.end();
   }
+});
+const socketServer = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => [...protocols][0] });
+server.on("upgrade", async (req, socket, head) => {
+  try {
+    const match = req.url.match(/^\/api\/rooms\/([0-9a-f-]{36})\/wake$/);
+    const protocols = (req.headers["sec-websocket-protocol"] || "").split(",").map((p) => p.trim());
+    if (!match || protocols.length !== 2 || !/^[a-f0-9]{64}$/.test(protocols[1])) throw new Error("Invalid fixture socket");
+    const headers = new Headers(req.headers);
+    headers.set("Authorization", "Bearer " + protocols[1]);
+    if (protocols[0] === "uos-guest-v1") headers.set("X-Access-Mode", "guest");
+    else { headers.set("X-Account-ID", "fixture-owner"); headers.set("X-Account-Role", "staff"); }
+    const response = await hub.fetch(new Request(`http://fixture/api/rooms/${match[1]}/state`, { headers }));
+    if (!response.ok) throw new Error("Unauthorized fixture socket");
+    const state = await response.json();
+    if (state.peers.find((p) => p.id === state.self)?.state === "declined") throw new Error("Ended fixture socket");
+    socketServer.handleUpgrade(req, socket, head, (ws) => {
+      ws.tags = ["room:" + match[1]];
+      ws.deserializeAttachment = () => ({ room: match[1], who: state.self, expires: Date.now() + 600000 });
+      sockets.add(ws);
+      ws.on("message", () => hub.webSocketMessage(ws));
+      ws.on("close", () => sockets.delete(ws));
+    });
+  } catch { socket.destroy(); }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = "http://127.0.0.1:" + server.address().port;
@@ -287,6 +313,8 @@ try {
   assert.equal(await staff.evaluate(() => window.uploadMetrics.calls), 4);
   console.log("PASS stalled direct packets switch to four concurrent HTTPS chunks without duplicate stored uploads");
   await tick(guest);
+  assert.equal(database.prepare("SELECT next FROM transfers WHERE id = ?").get(ids.healthy).next, 4);
+  assert.equal(await guest.evaluate(async (id) => (await (await import("/storage.js")).get("files", id)).next, ids.healthy), 4);
   // Refresh with both verified chunks and the missing-source failure retained.
   for (const [page, account, id] of [
     [staff, "fixture-owner", "staff"],
@@ -478,10 +506,13 @@ try {
   await uiStudent
     .locator("#student-name")
     .fill("U12345 <script>alert(1)</script>");
+  const approvalStarted = Date.now();
   await uiStudent.locator("#join-form button").click();
   await uiStudent
     .getByRole("heading", { name: "Waiting for staff approval" })
     .waitFor();
+  await uiStaff.locator("#approval-dialog[open]").waitFor({ timeout: 4000 });
+  assert.ok(Date.now() - approvalStarted < 4000, "Push approval must not wait for the 15-second idle poll");
   assert.equal(await uiStudent.locator("#workspace").isVisible(), false);
   assert.equal(await uiStudent.locator("#student-waiting-spinner").isVisible(), true);
   assert.equal(await uiStudent.locator("#student-waiting-spinner").evaluate(
@@ -559,10 +590,10 @@ try {
     for (const peer of state.peers)
       if (peer.state === "approved") peer.seen = Date.now() - 60000;
     await route.fulfill({ response, json: state });
-    await uiStaff.unroute("**/state?*");
   });
   await uiStaff.evaluate(() => dispatchEvent(new Event("online")));
   await uiStaff.locator("#connections").getByText("Approved · page inactive; waiting to reconnect", { exact: true }).waitFor();
+  await uiStaff.unroute("**/state?*");
   await uiStaff.evaluate(() => dispatchEvent(new Event("online")));
   await uiStaff.locator("#connections").getByText("Reconnected — same session", { exact: true }).waitFor();
   await uiSecond.reload();
@@ -665,6 +696,8 @@ try {
   );
 } finally {
   await browser?.close();
+  for (const ws of sockets) ws.terminate();
+  socketServer.close();
   await new Promise((resolve) => server.close(resolve));
   database.close();
 }
