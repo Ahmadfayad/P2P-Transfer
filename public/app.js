@@ -3,7 +3,7 @@ import { identity, fingerprint } from "./crypto.js";
 import { Exchange, request, finishFile } from "./transfer.js";
 import { csvCell, chunkCount, fileType } from "./protocol.js";
 import QRCode from "./vendor/qrcode.js";
-import { requireLogin } from "./account.js";
+import { requireLogin, currentUser } from "./account.js";
 import { record, setDiagnosticSnapshot } from "./diagnostics.js";
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
@@ -15,16 +15,13 @@ let invitation = fragment.has("room")
     }
   : null;
 if (invitation) {
-  sessionStorage.setItem("desk-invitation", JSON.stringify(invitation));
   history.replaceState(null, "", "/student");
-} else if (location.pathname === "/student") {
-  try {
-    invitation = JSON.parse(sessionStorage.getItem("desk-invitation"));
-  } catch {}
 }
+sessionStorage.removeItem("desk-invitation");
 const guest = location.pathname === "/student";
+document.body.classList.toggle("student-page", guest);
 const sessionKey = guest ? "guest-session" : "exchange-session";
-let exchange, session, lastState, timer, toastTimer, previewURL;
+let exchange, session, lastState, timer, expiryTimer, toastTimer, previewURL;
 let studentPhase = "checking",
   approval;
 const urls = new Map();
@@ -123,6 +120,7 @@ function showStudentPhase(phase) {
   $("student-phase").hidden = phase === "entry";
   $("student-cancel").hidden = !["pending", "declined"].includes(phase);
   $("student-saved").hidden = phase !== "ended";
+  $("change-desk").hidden = phase === "checking";
   $("student-gate-title").textContent = {
     entry: "Connect to the desk",
     checking: "Checking your connection",
@@ -133,13 +131,13 @@ function showStudentPhase(phase) {
   $("student-identity").textContent = session?.studentName || "";
   $("student-phase-text").textContent =
     {
-      checking: "Please wait while we restore your connection.",
+      checking: "Getting your desk ready. Please keep this page open.",
       pending:
         "Your request has been sent. Keep this page open. File exchange will open after staff approve you.",
       declined:
         "Staff did not accept this connection. Please speak to the person at your desk.",
       ended:
-        "Ask staff for a new invitation. Your saved documents remain on this device.",
+        "Scan the QR at your desk to reconnect. If a transfer was interrupted, please resend it. Downloaded files stay on your device.",
     }[phase] || "";
   const diagnostics = document.querySelector(".diagnostics");
   if (diagnostics) dialog.append(diagnostics);
@@ -203,6 +201,8 @@ $("student-saved").onclick = () => {
   studentPhase = "ended-view";
   session = null;
   lastState = null;
+  $("welcome").hidden = false;
+  $("student-start").hidden = false;
   $("student-gate").close();
   const diagnostics = $("student-gate").querySelector(".diagnostics");
   if (diagnostics) document.querySelector("main").append(diagnostics);
@@ -238,7 +238,13 @@ async function download(file) {
   a.download = file.name;
   a.click();
   if (file.transient && file.kind === "incoming") {
-    await exchange.saved(file, "download-initiated");
+    file.saveState = "download-initiated";
+    if (!exchange.stopped)
+      await exchange
+        .saved(file, "download-initiated")
+        .catch(() =>
+          message("Download started; the receipt could not be updated."),
+        );
     await renderFiles();
   }
 }
@@ -331,6 +337,10 @@ async function renderFiles() {
   }
   const current = session ? files.filter((f) => f.room === session.room) : [];
   const older = files.filter((f) => !session || f.room !== session.room);
+  if (exchange?.stopped) {
+    older.push(...current);
+    current.length = 0;
+  }
   renderList($("file-list"), current, true);
   renderList($("saved-list"), older, false);
   $("saved-card").hidden =
@@ -358,7 +368,7 @@ function renderList(container, files, current) {
           : t?.state === "accepted"
             ? "Transferring"
             : t?.state === "offered"
-              ? "Waiting for recipient"
+              ? "Connecting to recipient…"
               : "Queued";
     if (file.transient)
       status = file.error
@@ -372,9 +382,9 @@ function renderList(container, files, current) {
             : received
               ? "Received ✓ · download ready"
               : t?.state === "offered"
-                ? "Waiting for recipient"
+                ? "Receiving automatically…"
                 : "Streaming";
-    if (!current)
+    if (!current && !file.transient)
       status = received
         ? "Received ✓ · saved"
         : file.completed
@@ -391,7 +401,7 @@ function renderList(container, files, current) {
     const peer = incoming ? file.from : file.to;
     const name =
       peer === "desk"
-        ? "Desk"
+        ? session?.name || "Desk"
         : lastState?.peers.find((p) => p.id === peer)?.name || "Student";
     row.append(
       line,
@@ -412,16 +422,17 @@ function renderList(container, files, current) {
     if (error) row.append(element("p", error, "small"));
     if (file.error) row.append(element("p", file.error, "small"));
     const actions = element("div", undefined, "actions");
-    if (file.transient && file.kind === "incoming" && !file.accepting && t?.state === "offered")
-      actions.append(
-        button("Receive & save", () => exchange.receiveFile(file.id)),
-        button("Reject file", () =>
-          exchange.api("/transfers/" + file.id + "/reject", {
-            method: "POST",
-            body: {},
-          }),
-        ),
-      );
+    if (
+      file.blob &&
+      incoming &&
+      file.completed &&
+      fileType(file.name).startsWith("image/")
+    ) {
+      const thumbnail = element("img", undefined, "file-thumbnail");
+      thumbnail.src = blobURL(file);
+      thumbnail.alt = "Received image: " + file.name;
+      row.append(thumbnail);
+    }
     if (file.blob) {
       actions.append(
         button(
@@ -465,6 +476,9 @@ function renderState(state) {
   const desk = session.self === "desk";
   if (desk) localStorage.setItem("owned-desk-room", session.room);
   $("workspace").classList.toggle("student", !desk);
+  $("connections-heading").textContent = desk
+    ? "Student connections"
+    : "Your staff desk";
   const own = lastState.peers.find((p) => p.id === session.self);
   const approved = desk || own?.state === "approved";
   $("files").disabled = !approved;
@@ -480,7 +494,7 @@ function renderState(state) {
     );
   }
   $("send-note").textContent = approved
-    ? "New files are streamed temporarily. Keep both pages open; after a refresh or interruption, resend the file."
+    ? "Files arrive automatically. Preview or download below. Keep both pages open; refreshing requires a new connection and resending unfinished files."
     : own?.state === "declined"
       ? "The desk declined this connection. Ask staff for help."
       : "File access is locked until staff approve you.";
@@ -507,6 +521,7 @@ function renderState(state) {
     for (const group of endedNames.values()) {
       const row = element("div", undefined, "peer");
       row.append(
+        element("span", "Disconnected", "presence red"),
         element("strong", group.name),
         element(
           "p",
@@ -523,6 +538,23 @@ function renderState(state) {
         else if (inactivePeers.delete(peer.id)) reconnectedPeers.add(peer.id);
       }
       const row = element("div", undefined, "peer");
+      const age = Date.now() - peer.seen;
+      const light =
+        age > 70000
+          ? "red"
+          : peer.state === "pending" || age > 40000
+            ? "orange"
+            : "green";
+      const presence =
+        light === "green"
+          ? "Connected · page active"
+          : light === "orange"
+            ? "Waiting / reconnecting"
+            : "Page inactive · connection uncertain";
+      const indicator = element("span", presence, "presence " + light);
+      indicator.dataset.seen = peer.seen;
+      indicator.dataset.state = peer.state;
+      row.append(indicator);
       row.append(
         element("strong", peer.name),
         element(
@@ -530,10 +562,7 @@ function renderState(state) {
           peer.state === "pending"
             ? "Wants to connect"
             : peer.state === "approved"
-              ? "Approved" +
-                (Date.now() - peer.seen > 60000
-                  ? " · waiting for their page"
-                  : " · page active")
+              ? "Approved for file exchange"
               : "Declined",
           "small",
         ),
@@ -564,6 +593,8 @@ function renderState(state) {
     }
     if ([...$("recipient").options].some((o) => o.value === selected))
       $("recipient").value = selected;
+    if (!$("recipient").value && $("recipient").options.length === 2)
+      $("recipient").selectedIndex = 1;
     if (!activePeers.length)
       $("connections").append(
         element(
@@ -598,6 +629,27 @@ function renderState(state) {
     : "Encrypted HTTPS";
   renderFiles().catch((e) => message(e.message));
 }
+setInterval(() => {
+  for (const indicator of document.querySelectorAll(".presence")) {
+    if (!indicator.dataset.seen) continue;
+    const age = Date.now() - Number(indicator.dataset.seen);
+    const light =
+      exchange?.stopped || age > 70000
+        ? "red"
+        : exchange?.failures ||
+            indicator.dataset.state === "pending" ||
+            age > 40000
+          ? "orange"
+          : "green";
+    indicator.className = "presence " + light;
+    indicator.textContent =
+      light === "green"
+        ? "Connected · page active"
+        : light === "orange"
+          ? "Waiting / reconnecting"
+          : "Page inactive · connection uncertain";
+  }
+}, 5000);
 async function poll(instance) {
   if (instance !== exchange || instance.stopped || instance.polling) return;
   instance.polling = true;
@@ -677,13 +729,33 @@ async function begin(saved) {
   lastState = null;
   inactivePeers.clear();
   reconnectedPeers.clear();
-  await db.put("sessions", saved);
-  sessionStorage.setItem(sessionKey, saved.id);
-  localStorage.setItem(sessionKey, saved.id);
+  clearTimeout(expiryTimer);
+  expiryTimer = setTimeout(
+    () => {
+      exchange?.stop();
+      clearTimeout(timer);
+      $("network").textContent = "Session ended";
+      $("files").disabled = true;
+      showApproval(null);
+      if (guest) showStudentPhase("ended");
+      else {
+        $("workspace").hidden = true;
+        $("welcome").hidden = false;
+      }
+      message(
+        "Your ten-minute session ended. Reconnect to send more files. Download received files before closing this page.",
+      );
+      renderFiles().catch((error) => message(error.message));
+    },
+    Math.max(0, saved.expires - Date.now()),
+  );
   const instance = new Exchange(
     session,
     (state) => {
-      if (exchange === instance) renderState(state);
+      if (exchange !== instance) return;
+      if (instance.stopped)
+        renderFiles().catch((error) => message(error.message));
+      else renderState(state);
     },
     () => {
       if (exchange !== instance || instance.stopped) return;
@@ -702,13 +774,15 @@ async function begin(saved) {
     : "Your student connection";
   $("room-name").textContent = session.name;
   $("session-note").textContent =
-    "Session ends at " +
+    (desk
+      ? "Ten-minute desk session · ends at "
+      : "You’re connected to " + session.name + "’s desk · ends at ") +
     new Date(session.expires).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
     }) +
     ".";
-  $("leave").textContent = desk ? "End desk session" : "Leave session";
+  $("leave").textContent = desk ? "End desk session" : "Change desk";
   $("invite-card").hidden = !desk;
   $("recipient-label").hidden = !desk;
   if (desk) {
@@ -744,7 +818,7 @@ $("desk-form").onsubmit = (event) => {
   event.preventDefault();
   submit(event.currentTarget, async () => {
     const keys = await identity();
-    const name = $("desk-name").value.trim();
+    const name = currentUser.name;
     const room = await (
       await request("/rooms", {
         method: "POST",
@@ -833,6 +907,7 @@ async function leaveSession(confirmEnd = true) {
       });
     exchange.stop();
     clearTimeout(timer);
+    clearTimeout(expiryTimer);
     localStorage.removeItem(sessionKey);
     sessionStorage.removeItem(sessionKey);
     session = null;
@@ -850,7 +925,36 @@ async function leaveSession(confirmEnd = true) {
     $("student-cancel").disabled = false;
   }
 }
-$("leave").onclick = () => leaveSession();
+$("leave").onclick = () => (guest ? changeDesk() : leaveSession());
+async function changeDesk() {
+  if (session) await leaveSession(false);
+  if (session) return;
+  exchange?.stop();
+  invitation = null;
+  $("student-gate").close();
+  $("welcome").hidden = false;
+  $("join-form").hidden = true;
+  $("student-start").hidden = false;
+  $("desk-link").focus();
+}
+$("change-desk").onclick = changeDesk;
+$("desk-link-form").onsubmit = (event) => {
+  event.preventDefault();
+  try {
+    const link = new URL($("desk-link").value.trim());
+    const fields = new URLSearchParams(link.hash.slice(1));
+    if (
+      link.origin !== location.origin ||
+      !fields.get("room") ||
+      !fields.get("invite") ||
+      !fields.get("key")
+    )
+      throw new Error("Use the invitation link copied by staff at this desk.");
+    location.assign("/student#" + fields.toString());
+  } catch (error) {
+    message(error.message);
+  }
+};
 async function choose(files) {
   if (guest && studentPhase !== "approved") {
     message("Wait for staff to approve your connection before choosing files.");
@@ -928,7 +1032,7 @@ async function init() {
       document.body.classList.add("student-page");
       $("welcome").firstElementChild.classList.add("student-hero");
       $("welcome").querySelector("h1").innerHTML =
-        "Your desk.<br>Your documents.";
+        "Hey there 👋<br>Let’s get your files across.";
       $("welcome").querySelector(".eyebrow").textContent =
         "Student document portal";
       $("welcome").querySelector(".features").innerHTML =
@@ -938,20 +1042,14 @@ async function init() {
       $("desk-form").hidden = true;
       $("join-form").hidden = !invitation;
       $("student-start").hidden = Boolean(invitation);
-      if (!invitation) return;
+      if (!invitation) {
+        $("student-start").querySelector("p").textContent =
+          "Scan the QR at your staff desk, or paste their invitation link. A refreshed or ended session cannot be restored; reconnect and resend unfinished files.";
+        return;
+      }
       showStudentPhase("checking");
       db.useAccount("guest:" + invitation.room);
-      const saved = await db.get(
-        "sessions",
-        sessionStorage.getItem(sessionKey) || "",
-      );
-      if (saved?.guest && saved.room === invitation.room) {
-        if (saved.expires > Date.now()) await begin(saved);
-        else {
-          session = saved;
-          showStudentPhase("ended");
-        }
-      } else showStudentPhase("entry");
+      showStudentPhase("entry");
       await renderFiles();
       await request("/health");
       if (!exchange) $("network").textContent = "Ready to connect";
@@ -965,19 +1063,6 @@ async function init() {
       try {
         const count = await db.recoverLegacy(user.id);
         $("legacy-recovery").hidden = true;
-        const saved = await db.get(
-          "sessions",
-          sessionStorage.getItem(sessionKey) ||
-            localStorage.getItem(sessionKey) ||
-            "",
-        );
-        if (
-          !exchange &&
-          saved &&
-          saved.expires > Date.now() &&
-          (!invitation || saved.room === invitation.room)
-        )
-          await begin(saved);
         await renderFiles();
         message(`${count} earlier files recovered into your account.`);
       } catch (e) {
@@ -994,25 +1079,8 @@ async function init() {
       throw new Error(
         "Open this service over HTTPS to enable private transfers.",
       );
-    const saved = await db.get(
-      "sessions",
-      sessionStorage.getItem(sessionKey) ||
-        localStorage.getItem(sessionKey) ||
-        "",
-    );
-    if (
-      saved &&
-      saved.expires > Date.now() &&
-      (!invitation || (saved.room === invitation.room && saved.self !== "desk"))
-    )
-      await begin(saved);
-    else {
-      if (invitation) {
-        $("desk-form").hidden = true;
-        $("join-form").hidden = false;
-      }
-      await renderFiles();
-    }
+    $("desk-name").value = user.name;
+    await renderFiles();
     await request("/health");
     if (!exchange) $("network").textContent = "Service ready";
   } catch (e) {

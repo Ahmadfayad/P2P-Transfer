@@ -173,7 +173,7 @@ if (typeof window !== "undefined") {
         session.server = session.server.map(diagnosticRecord);
       const report = {
         format: 2,
-        appVersion: "stream-v1",
+        appVersion: "auto-receive-v1",
         host: location.host,
         exportedAt: new Date().toISOString(),
         network: panel.querySelector("select").value,

@@ -11,7 +11,12 @@
   <body>
     <header>
       <a class="brand" href="/"
-        >↗ <span>Document Exchange<small>University of Sharjah</small></span></a
+        ><img
+          class="uos-logo"
+          src="/uos-logo.png"
+          alt="University of Sharjah logo"
+        />
+        <span>Document Exchange<small>University of Sharjah</small></span></a
       ><span class="pill" id="network">Checking connection</span>
     </header>
     <nav id="account-tools" hidden aria-label="Account">
@@ -69,7 +74,7 @@
             <label
               >Desk name<input
                 id="desk-name"
-                required
+                readonly
                 maxlength="64"
                 placeholder="Student services"
                 autocomplete="organization" /></label
@@ -78,10 +83,24 @@
               Students: scan the desk’s QR code or open the link they share.
             </p>
           </form>
-          <p id="student-start" hidden>
-            Open the invitation link or scan the QR code from your desk to start
-            a transfer.
-          </p>
+          <div id="student-start" hidden>
+            <h2>Find your desk</h2>
+            <p>
+              Scan the QR code shown by the staff member you’re seated with, or
+              paste their invitation link below.
+            </p>
+            <form id="desk-link-form">
+              <label
+                >Desk invitation link<input
+                  id="desk-link"
+                  type="url"
+                  required
+                  placeholder="Paste the link from your staff desk"
+                  autocomplete="off"
+              /></label>
+              <button type="submit">Connect to this desk →</button>
+            </form>
+          </div>
         </div>
       </section>
       <section id="workspace" hidden>
@@ -121,9 +140,9 @@
                 this browser until you remove them.
               </p>
               <p class="small">
-                Sessions last 8 hours. PDF, DOCX, PNG and JPG · 150 MB per file
-                · Desktop Chrome/Edge supports direct disk saves; other browsers
-                receive temporary files up to 16 MB.
+                Sessions last 10 minutes. PDF, DOCX, PNG and JPG · 150 MB per
+                file · 300 MB of temporary received files per page. Download
+                files before closing or refreshing.
               </p>
             </section>
           </aside>
@@ -132,7 +151,7 @@
               <div class="section-heading">
                 <div>
                   <span class="eyebrow">Send a document</span>
-                  <h2>A few clicks. A confirmed receipt.</h2>
+                  <h2>Pick a file. We’ll take it from here.</h2>
                 </div>
                 <span class="tag" id="route-label"
                   >Encrypted HTTPS available</span
@@ -159,7 +178,7 @@
               <div class="section-heading">
                 <div>
                   <span class="eyebrow">Your handovers</span>
-                  <h2>Files & receipts</h2>
+                  <h2>Your files</h2>
                 </div>
                 <button class="secondary compact" id="export">
                   Export receipts
@@ -237,10 +256,13 @@
           Cancel request
         </button>
         <button id="student-saved" type="button" class="secondary" hidden>
-          View saved files
+          View received files
         </button>
       </div>
       <p id="student-error" role="alert"></p>
+      <button id="change-desk" type="button" class="secondary">
+        At a different desk? Change desk
+      </button>
     </dialog>
     <dialog
       id="approval-dialog"

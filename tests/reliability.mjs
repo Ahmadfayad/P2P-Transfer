@@ -103,6 +103,7 @@ const server = createServer(async (req, res) => {
           return send({ error: "Please sign in" }, 401);
         headers.set("X-Account-ID", actor.id);
         headers.set("X-Account-Role", actor.role);
+        headers.set("X-Account-Name", encodeURIComponent(actor.name));
       }
       const controller = new AbortController();
       res.on("close", () => controller.abort());

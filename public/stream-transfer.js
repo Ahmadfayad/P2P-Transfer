@@ -11,7 +11,7 @@ import { Direct } from "./direct.js";
 import { request } from "./transfer.js";
 import { record } from "./diagnostics.js";
 const BATCH = 8,
-  MEMORY_LIMIT = 16 * 1048576;
+  MEMORY_LIMIT = 300 * 1048576;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export class Exchange {
   constructor(session, changed) {
@@ -195,6 +195,21 @@ export class Exchange {
         this.jobs.get(row.id)?.abort();
       }
       if (
+        file.kind === "incoming" &&
+        row.state === "offered" &&
+        !file.error &&
+        !file.accepting &&
+        !this.jobs.has(row.id) &&
+        this.jobs.size < 4
+      ) {
+        await this.receiveFile(row.id).catch(async (error) => {
+          file.error = error.message;
+          await this.api("/transfers/" + row.id + "/reject", {
+            method: "POST",
+          }).catch(() => {});
+        });
+      }
+      if (
         file.kind === "outgoing" &&
         row.state === "accepted" &&
         !file.error &&
@@ -352,35 +367,27 @@ export class Exchange {
       );
     file.accepting = true;
     this.changed(this.state);
-    let writer;
     try {
-      if (typeof showSaveFilePicker === "function") {
-        const handle = await showSaveFilePicker({ suggestedName: file.name });
-        writer = await handle.createWritable();
-      } else {
-        const occupied = [...this.files.values()]
-          .filter((f) => f.kind === "incoming" && (f.blob || f.memoryReserved))
-          .reduce((n, f) => n + f.size, 0);
-        if (occupied + file.size > MEMORY_LIMIT)
-          throw new Error(
-            "This browser supports temporary downloads up to 16 MB. Use desktop Chrome or Edge to stream larger files directly to disk.",
-          );
-        file.memoryReserved = true;
-      }
+      // Automatic reception cannot open a disk picker without a user gesture.
+      const occupied = [...this.files.values()]
+        .filter((f) => f.kind === "incoming" && (f.blob || f.memoryReserved))
+        .reduce((n, f) => n + f.size, 0);
+      if (occupied + file.size > MEMORY_LIMIT)
+        throw new Error(
+          "Temporary file memory is full (300 MB total). Download and remove received files, then ask the sender to resend.",
+        );
+      file.memoryReserved = true;
       await this.api("/transfers/" + id + "/accept", { method: "POST" });
-      this.startJob(row, (controller) =>
-        this.receive(row, file, writer, controller),
-      );
+      this.startJob(row, (controller) => this.receive(row, file, controller));
     } catch (error) {
       file.memoryReserved = false;
-      await writer?.abort().catch(() => {});
       if (error.name !== "AbortError") throw error;
     } finally {
       file.accepting = false;
       this.changed(this.state);
     }
   }
-  async receive(row, file, writer, controller) {
+  async receive(row, file, controller) {
     const t = { ...row, from: row.sender, to: row.recipient },
       key = await this.key(t.from),
       total = chunkCount(t.size),
@@ -397,8 +404,7 @@ export class Exchange {
         (index === 0 && !validSignature(bytes, t.name))
       )
         throw new Error("File integrity verification failed.");
-      if (writer) await writer.write(bytes);
-      else parts.push(bytes);
+      parts.push(bytes);
       index++;
       file.next = index;
       this.changed(this.state);
@@ -467,13 +473,8 @@ export class Exchange {
           throw new Error("Unexpected trailing stream data.");
       }
       this.check(controller);
-      if (writer) {
-        await writer.close();
-        file.saveState = "disk-saved";
-      } else {
-        file.blob = new Blob(parts, { type: fileType(file.name) });
-        file.saveState = "received";
-      }
+      file.blob = new Blob(parts, { type: fileType(file.name) });
+      file.saveState = "received";
       file.completed = Date.now();
       await this.api("/transfers/" + t.id + "/progress", {
         method: "POST",
@@ -493,9 +494,6 @@ export class Exchange {
         state: file.saveState,
         duration: Math.round(performance.now() - started),
       });
-    } catch (error) {
-      await writer?.abort().catch(() => {});
-      throw error;
     } finally {
       await reader?.cancel().catch(() => {});
     }

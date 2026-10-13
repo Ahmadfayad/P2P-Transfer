@@ -1,6 +1,5 @@
 import { chromium } from "playwright";
 import { login, cleanupAuthFixtures } from "./auth-helper.mjs";
-import { readFile } from "node:fs/promises";
 const base = process.env.TEST_URL || "http://127.0.0.1:8787";
 const browser = await chromium.launch({
   headless: true,
@@ -12,25 +11,25 @@ const rooms = [];
 async function openDesk(page, name) {
   await login(page, base, name === "Other desk" ? "otherStaff" : "staff");
   await page.goto(base);
-  await page.getByLabel("Desk name", { exact: true }).fill(name);
+  const created = page.waitForResponse(
+    (r) => r.url().endsWith("/api/rooms") && r.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Open desk" }).click();
+  const room = await (await created).json();
   await page.getByRole("button", { name: "Copy invitation link" }).waitFor();
-  const saved = await page.evaluate(async () => {
-    const db = await import("/storage.js");
-    const s = await db.get(
-      "sessions",
-      sessionStorage.getItem("exchange-session"),
-    );
-    const { fingerprint } = await import("/crypto.js");
-    return {
-      owner: { room: s.room, token: s.token },
-      invite: {
-        room: s.room,
-        invite: s.invite,
-        key: await fingerprint(s.publicKey),
-      },
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async (value) => {
+      window.testLink = value;
     };
   });
+  await page.getByRole("button", { name: "Copy invitation link" }).click();
+  const link = await page.evaluate(() => window.testLink);
+  const saved = {
+    owner: { room: room.id, token: room.token },
+    invite: Object.fromEntries(
+      new URLSearchParams(new URL(link).hash.slice(1)),
+    ),
+  };
   rooms.push(saved.owner);
   saved.owner.request = page.request;
   return saved.invite;
@@ -52,17 +51,11 @@ try {
   await otherDesk.locator("#approval-approve").click({ timeout: 20000 });
   await guest.getByText("Your student connection", { exact: true }).waitFor();
   await desk.reload();
-  await desk.getByRole("button", { name: "End desk session" }).waitFor();
-  await desk
-    .getByRole("heading", { name: "First desk", exact: true })
-    .waitFor();
+  await desk.getByRole("button", { name: "Open desk" }).waitFor();
   await guest.reload();
-  await guest.getByText("Your student connection", { exact: true }).waitFor();
-  await guest
-    .getByRole("heading", { name: "Other desk", exact: true })
-    .waitFor();
+  await guest.locator("#desk-link").waitFor();
   console.log(
-    "PASS separate tabs retain their own desk and student roles after refresh",
+    "PASS refresh preserves employee login but does not restore desk or guest sessions",
   );
   const ownGuest = await first.newPage();
   await ownGuest.goto(base + "/#" + new URLSearchParams(own));

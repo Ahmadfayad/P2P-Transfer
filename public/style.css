@@ -1096,8 +1096,14 @@ footer {
   border-radius: 50%;
   animation: waiting-turn 1s linear infinite;
 }
-.waiting-spinner[hidden] { display: none; }
-@keyframes waiting-turn { to { transform: rotate(360deg); } }
+.waiting-spinner[hidden] {
+  display: none;
+}
+@keyframes waiting-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .connection-badge {
   display: inline-block;
   margin: 8px 0;
@@ -1113,7 +1119,10 @@ footer {
   padding-top: 14px;
   border-top: 1px solid #dce3f2;
 }
-.ended-connections summary { cursor: pointer; color: #59667c; }
+.ended-connections summary {
+  cursor: pointer;
+  color: #59667c;
+}
 .connection-dialog [role="alert"] {
   color: #a02c35;
   overflow-wrap: anywhere;
@@ -1152,5 +1161,163 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   .spinner {
     animation: none;
+  }
+}
+
+/* Desk presence is based on recent authenticated page activity, not ICE alone. */
+.uos-logo {
+  width: 230px;
+  max-width: 42vw;
+  height: auto;
+  object-fit: contain;
+}
+.presence {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.presence::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  background: #db4545;
+  box-shadow: 0 0 0 4px #db454514;
+}
+.presence.green::before {
+  background: #159a64;
+  box-shadow: 0 0 0 4px #159a6414;
+}
+.presence.orange::before {
+  background: #de8b12;
+  box-shadow: 0 0 0 4px #de8b1214;
+}
+.student-page {
+  background:
+    radial-gradient(ellipse at 10% 5%, #d9f6ed, transparent 45%),
+    radial-gradient(ellipse at 95% 20%, #e6ddff, transparent 55%), #f7f9fe;
+}
+.student-page header {
+  border: 0;
+}
+.student-page .page-heading {
+  padding: 26px 30px;
+  border-radius: 26px;
+  background: linear-gradient(115deg, #173f49, #3e4887);
+  color: white;
+  margin-bottom: 26px;
+  box-shadow: 0 12px 35px #193c4918;
+}
+.student-page .page-heading .eyebrow,
+.student-page .page-heading p {
+  color: #dcf7f0;
+}
+.student-page .page-heading h1 {
+  font-size: clamp(27px, 5vw, 42px);
+  margin: 8px 0;
+}
+.student-page .layout {
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 24px;
+}
+.student-page .card,
+.student-page .connection-dialog {
+  border-radius: 26px;
+  border: 1px solid #e1e9ee;
+  box-shadow: 0 8px 32px #25365208;
+}
+.student-page .drop {
+  background: #f1fbf7;
+  border: 2px dashed #72b9a6;
+  border-radius: 22px;
+  min-height: 180px;
+}
+.student-page .drop:hover,
+.student-page .drop:focus-within {
+  background: #e4f8ef;
+  border-color: #288a71;
+}
+.student-page .upload-icon {
+  background: #ddf4e9;
+  color: #1b765f;
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+}
+.student-page button:not(.secondary) {
+  background: #236c60;
+}
+.student-page #connections-heading {
+  font-size: 18px;
+}
+.student-page .connection-dialog h2 {
+  font-size: 28px;
+  line-height: 1.2;
+}
+.student-page .connection-dialog .eyebrow {
+  color: #237761;
+}
+.student-page .features span {
+  color: #235a51;
+  background: white;
+  border: 1px solid #d7eae5;
+  padding: 10px 14px;
+  border-radius: 16px;
+}
+.student-page #send-note {
+  color: #536876;
+  line-height: 1.7;
+}
+#desk-name[readonly] {
+  background: #f3f6fa;
+  cursor: default;
+}
+.file-thumbnail {
+  max-width: 100%;
+  max-height: 180px;
+  display: block;
+  border-radius: 12px;
+  margin: 12px 0;
+  object-fit: contain;
+}
+@media (max-width: 760px) {
+  .brand {
+    font-size: 16px;
+    gap: 8px;
+  }
+  .brand small {
+    font-size: 9px;
+    letter-spacing: 0.4px;
+  }
+  .uos-logo {
+    width: 150px;
+    max-width: 39vw;
+  }
+  .student-page .layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .student-page .page-heading {
+    padding: 22px;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .student-page .card {
+    padding: 24px;
+  }
+  .student-page .section-heading {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .student-page main {
+    padding-top: 20px;
+  }
+  .student-page .page-heading p {
+    line-height: 1.6;
   }
 }

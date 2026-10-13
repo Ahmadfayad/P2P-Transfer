@@ -12,6 +12,31 @@ import {
   csvCell,
 } from "../public/protocol.js";
 import { Direct } from "../public/direct.js";
+import { Exchange } from "../public/stream-transfer.js";
+
+test("automatic receiving reserves a bounded total before accepting contents", async () => {
+  const exchange = Object.create(Exchange.prototype);
+  const file = { id: "new", kind: "incoming", size: 150 * 1048576 };
+  exchange.state = { transfers: [{ id: file.id, state: "offered" }] };
+  exchange.files = new Map([
+    [file.id, file],
+    [
+      "existing",
+      { kind: "incoming", size: 200 * 1048576, memoryReserved: true },
+    ],
+  ]);
+  exchange.jobs = new Map();
+  exchange.changed = () => {};
+  exchange.api = () => {
+    throw new Error("Must not accept when buffers are full");
+  };
+  await assert.rejects(
+    exchange.receiveFile(file.id),
+    /Temporary file memory is full/,
+  );
+  assert.equal(file.memoryReserved, false);
+  assert.equal(file.accepting, false);
+});
 
 test("file boundaries, canonical types and spreadsheet formula protection", () => {
   assert.equal(validFile({ name: "unsafe.html", size: 100 }), false);
@@ -77,6 +102,41 @@ function service() {
     database,
   };
 }
+
+test("desk name comes from the authenticated profile and expires after ten minutes", async (t) => {
+  const { hub } = service();
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const room = await (
+    await hub.fetch(
+      new Request("https://test/api/rooms", {
+        method: "POST",
+        headers: {
+          "X-Account-ID": "owner",
+          "X-Account-Role": "staff",
+          "X-Account-Name": "Ahmad%20Albalbissi",
+        },
+        body: JSON.stringify({
+          name: "Forged desk name",
+          publicKey: (await identity()).publicKey,
+        }),
+      }),
+    )
+  ).json();
+  assert.equal(room.name, "Ahmad Albalbissi");
+  assert.equal(room.expires, now + 600000);
+  t.mock.method(Date, "now", () => now + 600001);
+  const ended = await hub.fetch(
+    new Request("https://test/api/rooms/" + room.id + "/state", {
+      headers: {
+        Authorization: "Bearer " + room.token,
+        "X-Account-ID": "owner",
+        "X-Account-Role": "staff",
+      },
+    }),
+  );
+  assert.equal(ended.status, 410);
+});
 test("QR guests need an invitation and private peer token, cannot impersonate a desk", async () => {
   const { hub, database } = service();
   const key = (await identity()).publicKey;
@@ -796,8 +856,22 @@ test("visitors can withdraw only their own request; stale approval cannot revive
         (await api(`/transfers/${id}/accept`, staffHeaders)).status,
         200,
       );
-      assert.equal((await api(`/transfers/${id}/progress`, staffHeaders, { next: 1 })).status, 200);
-      if (id === received) assert.equal((await api(`/transfers/${id}/complete`, staffHeaders, {size:8,integrity:"verified",saveState:"received"})).status,200);
+      assert.equal(
+        (await api(`/transfers/${id}/progress`, staffHeaders, { next: 1 }))
+          .status,
+        200,
+      );
+      if (id === received)
+        assert.equal(
+          (
+            await api(`/transfers/${id}/complete`, staffHeaders, {
+              size: 8,
+              integrity: "verified",
+              saveState: "received",
+            })
+          ).status,
+          200,
+        );
     }
     assert.equal(
       (await api("/leave", guestHeaders, { peer: second.id })).status,

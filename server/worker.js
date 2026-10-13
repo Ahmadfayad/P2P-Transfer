@@ -15,7 +15,7 @@ import { parseUsersCSV } from "../public/user-csv.js";
 import { turnPilot } from "./turn.js";
 import { StreamRelay, BATCH_FRAMES } from "./stream-relay.js";
 
-const SESSION_MS = 8 * 60 * 60 * 1000;
+const SESSION_MS = 10 * 60 * 1000;
 const MAX_BUFFER = 32 * 1024 * 1024;
 const encoder = new TextEncoder();
 const token = () =>
@@ -301,7 +301,7 @@ export default {
       );
     const headers = new Headers(response.headers);
     headers.set("X-Request-ID", requestId);
-    headers.set("X-App-Version", "stream-v1");
+    headers.set("X-App-Version", "auto-receive-v1");
     if (
       url.pathname.startsWith("/api/") &&
       response.status >= 400 &&
@@ -802,6 +802,8 @@ export class TransferHub {
           (await hash(request.headers.get("CF-Connecting-IP") || "local")),
         20,
       );
+      if (request.headers.has("X-Account-Name"))
+        body.name = decodeURIComponent(request.headers.get("X-Account-Name"));
       check(
         label(body.name) && validKey(body.publicKey),
         400,
@@ -851,7 +853,10 @@ export class TransferHub {
         "desk",
         request.headers.get("X-Account-ID"),
       );
-      return json({ id, token: owner, invite, expires }, 201);
+      return json(
+        { id, name: body.name.trim(), token: owner, invite, expires },
+        201,
+      );
     }
     check(
       segments[0] === "api" && segments[1] === "rooms" && uuid(segments[2]),

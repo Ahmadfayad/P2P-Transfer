@@ -15,7 +15,10 @@ const browser = await { chromium, firefox, webkit }[engine].launch({
   ...(engine === "chromium"
     ? {
         executablePath:
-          process.env.CHROME_PATH || (process.platform === "win32" ? "C:/Program Files/Google/Chrome/Application/chrome.exe" : chromium.executablePath()),
+          process.env.CHROME_PATH ||
+          (process.platform === "win32"
+            ? "C:/Program Files/Google/Chrome/Application/chrome.exe"
+            : chromium.executablePath()),
       }
     : {}),
 });
@@ -23,7 +26,7 @@ const rooms = [],
   contexts = [],
   errors = [],
   measurements = [];
-async function setup({ direct = false, disk = false, slow = 0 } = {}) {
+async function setup({ direct = false, clock = false } = {}) {
   const staffContext = await browser.newContext({
       extraHTTPHeaders: testHeaders(base),
     }),
@@ -52,55 +55,41 @@ async function setup({ direct = false, disk = false, slow = 0 } = {}) {
         };
       });
   }
-  await staffContext.addInitScript(
-    ({ disk, slow }) => {
-      window.testWrites = [];
-      window.testAborted = false;
-      window.testClosed = false;
-      window.showSaveFilePicker = disk
-        ? async () => ({
-            createWritable: async () => ({
-              write: async (bytes) => {
-                if (slow) await new Promise((r) => setTimeout(r, slow));
-                window.testWrites.push(new Uint8Array(bytes));
-              },
-              close: async () => {
-                window.testClosed = true;
-              },
-              abort: async () => {
-                window.testAborted = true;
-                window.testWrites = [];
-              },
-            }),
-          })
-        : undefined;
-    },
-    { disk, slow },
-  );
   const staff = await staffContext.newPage(),
     guest = await guestContext.newPage();
   for (const p of [staff, guest]) p.on("pageerror", (e) => errors.push(e.name));
+  if (clock) {
+    await staff.clock.install();
+    await guest.clock.install();
+  }
   await login(staff, base);
   await staff.goto(base);
-  await staff.locator("#desk-name").fill("Streaming test");
+  const created = staff.waitForResponse(
+    (r) => r.url().endsWith("/api/rooms") && r.request().method() === "POST",
+  );
   await staff.getByRole("button", { name: "Open desk" }).click();
+  const room = await (await created).json();
   await staff
     .getByRole("button", { name: "Copy invitation link", exact: true })
     .waitFor();
-  const invitation = await staff.evaluate(async () => {
-    const db = await import("/storage.js");
-    const s = await db.get(
-      "sessions",
-      sessionStorage.getItem("exchange-session"),
-    );
-    const { fingerprint } = await import("/crypto.js");
-    return {
-      room: s.room,
-      invite: s.invite,
-      key: await fingerprint(s.publicKey),
-      token: s.token,
+  await staff.evaluate(() => {
+    navigator.clipboard.writeText = async (value) => {
+      window.testLink = value;
     };
   });
+  await staff
+    .getByRole("button", { name: "Copy invitation link", exact: true })
+    .click();
+  const link = await staff.evaluate(() => window.testLink);
+  const invitation = {
+    ...Object.fromEntries(new URLSearchParams(new URL(link).hash.slice(1))),
+    token: room.token,
+  };
+  assert.equal(
+    room.expires > Date.now() && room.expires <= Date.now() + 600000,
+    true,
+  );
+  assert.equal(await staff.locator("#desk-name").inputValue(), room.name);
   rooms.push({
     id: invitation.room,
     token: invitation.token,
@@ -140,10 +129,6 @@ async function send(pair, name, bytes) {
   await pair.guest
     .locator("#files")
     .setInputFiles({ name, mimeType: "application/pdf", buffer: bytes });
-  if (!baseline)
-    await pair.staff
-      .getByRole("button", { name: "Receive & save", exact: true })
-      .click({ timeout: 30000 });
 }
 async function basic(options) {
   const pair = await setup(options),
@@ -163,30 +148,27 @@ async function basic(options) {
       if (r.url().includes("/api/")) apiRequests++;
       if (r.method() === "POST" && r.url().includes("/stream")) uploads++;
     });
+  if (options.direct)
+    await pair.staff.evaluate(() => {
+      const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+      window.testConsumed = 0;
+      crypto.subtle.decrypt = async (...args) => {
+        await new Promise((r) => setTimeout(r, 80));
+        const data = await decrypt(...args);
+        window.testConsumed++;
+        return data;
+      };
+    });
   const start = performance.now();
   await send(pair, name, bytes);
   if (options.direct) {
-    await pair.staff.waitForFunction(() => window.testWrites.length >= 2);
+    await pair.staff.waitForFunction(() => window.testConsumed >= 2);
     await pair.staff.evaluate(() =>
       window.testConnections.forEach((pc) => pc.close()),
     );
   }
   let digest;
-  if (options.disk) {
-    await pair.staff
-      .getByText("Saved to disk ✓", { exact: true })
-      .waitFor({ timeout: 120000 });
-    digest = await pair.staff.evaluate(async () => {
-      const blob = new Blob(window.testWrites);
-      return Array.from(
-        new Uint8Array(
-          await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
-        ),
-        (b) => b.toString(16).padStart(2, "0"),
-      ).join("");
-    });
-    assert.equal(await pair.staff.evaluate(() => window.testClosed), true);
-  } else {
+  {
     await pair.staff
       .getByText(baseline ? "Received ✓" : "Received ✓ · download ready", {
         exact: true,
@@ -220,7 +202,7 @@ async function basic(options) {
     elapsedMs,
     apiRequests,
     uploads,
-    receiver: options.disk ? "disk-api-test-double" : "browser-download",
+    receiver: "browser-download",
   });
   if (!baseline) {
     for (const p of [pair.staff, pair.guest])
@@ -261,54 +243,140 @@ async function basic(options) {
       elapsedMs +
       " ms",
   );
+  if (!baseline) {
+    assert.equal(
+      await pair.staff.getByRole("button", { name: "Receive & save" }).count(),
+      0,
+    );
+    assert.equal(
+      (await pair.staff.locator(".presence.green").count()) > 0,
+      true,
+    );
+    await pair.staff
+      .locator("#recipient")
+      .selectOption({ label: "Sensitive test student" });
+    await pair.staff.locator("#files").setInputFiles({
+      name: "return.pdf",
+      mimeType: "application/pdf",
+      buffer: bytes,
+    });
+    await pair.guest
+      .getByText("Received ✓ · download ready", { exact: true })
+      .waitFor({ timeout: 120000 });
+    const back = pair.guest.waitForEvent("download");
+    await pair.guest
+      .getByRole("button", { name: "Download document", exact: true })
+      .click();
+    assert.deepEqual(await readFile(await (await back).path()), bytes);
+    await pair.guest.setViewportSize({ width: 390, height: 844 });
+    assert.equal(
+      await pair.guest.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+    );
+    await pair.guest.screenshot({
+      path: "test-results/student-mobile.png",
+      fullPage: true,
+    });
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6VwkAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await pair.staff
+      .locator("#files")
+      .setInputFiles({
+        name: "preview.png",
+        mimeType: "image/png",
+        buffer: image,
+      });
+    await pair.guest.locator(".file-thumbnail").waitFor({ timeout: 30000 });
+    assert.equal(
+      await pair.guest
+        .locator(".file-thumbnail")
+        .evaluate((img) => img.complete && img.naturalWidth === 1),
+      true,
+    );
+    const imageRow = pair.guest
+      .locator(".file")
+      .filter({ has: pair.guest.getByText("preview.png", { exact: true }) });
+    await imageRow
+      .getByRole("button", { name: "Preview", exact: true })
+      .click();
+    await pair.guest.locator("#preview-content img").waitFor();
+    await pair.guest.getByRole("button", { name: "Close preview" }).click();
+    await pair.staff.screenshot({
+      path: "test-results/staff-auto-receive.png",
+      fullPage: true,
+    });
+    await pair.guest
+      .getByRole("button", { name: "Change desk", exact: true })
+      .click();
+    await pair.guest.locator("#desk-link").waitFor();
+    await pair.staff
+      .getByText("Ended connections (1)", { exact: true })
+      .waitFor({ timeout: 30000 });
+    assert.equal(await pair.staff.locator(".presence.red").count(), 1);
+    await pair.guest.reload();
+    await pair.guest.locator("#desk-link").waitFor();
+    console.log(
+      "PASS automatic reception in both directions, mobile layout, presence, desk switching and no session restoration",
+    );
+  }
   await pair.staffContext.close();
   await pair.guestContext.close();
 }
 try {
-  await basic({ disk: false });
+  await basic({});
   if (!baseline && process.env.COMPAT_ONLY !== "1") {
-    await basic({ disk: true, direct: true, slow: 80 });
-    const pair = await setup({ disk: true, slow: 250 });
-    await send(pair, "interruption.pdf", payload(20 * 1048576));
-    await pair.staff.waitForFunction(() => window.testWrites.length >= 2);
+    await basic({ direct: true });
+    // Slow decryption keeps an automatically accepted transfer active for cancellation checks.
+    const slowReceive = async (pair) => {
+      await pair.staff.evaluate(() => {
+        const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+        window.testConsumed = 0;
+        crypto.subtle.decrypt = async (...args) => {
+          await new Promise((r) => setTimeout(r, 300));
+          const bytes = await decrypt(...args);
+          window.testConsumed++;
+          return bytes;
+        };
+      });
+      await send(pair, "interruption.pdf", payload(20 * 1048576));
+      await pair.staff.waitForFunction(() => window.testConsumed >= 2);
+    };
+    const pair = await setup();
+    await slowReceive(pair);
     await pair.staff.reload();
-    await pair.staff
+    await pair.staff.getByRole("button", { name: "Open desk" }).waitFor();
+    await pair.guest
       .getByText("Interrupted — resend needed", { exact: true })
-      .waitFor({ timeout: 30000 });
+      .waitFor({ timeout: 60000 });
     assert.equal(
       await pair.staff.evaluate(async () => {
         const db = await import("/storage.js");
-        return (await db.all("files")).length;
+        return (
+          (await db.all("sessions")).length +
+          (await db.all("files")).length +
+          (await db.all("chunks")).length
+        );
       }),
       0,
     );
     console.log(
-      "PASS refresh interruption asks for resend and does not persist new contents",
+      "PASS refresh does not restore a session or persist document contents",
     );
-    const revoked = await setup({ disk: true, slow: 250 });
-    await send(revoked, "revoked.pdf", payload(20 * 1048576));
-    await revoked.staff.waitForFunction(() => window.testWrites.length >= 2);
+    const revoked = await setup();
+    await slowReceive(revoked);
     await revoked.staff
       .getByRole("button", { name: "End connection", exact: true })
       .click();
-    await revoked.staff.waitForFunction(() => window.testAborted);
-    console.log("PASS staff revocation aborts the disk write");
-    const rejected = await setup();
-    await rejected.guest.locator("#files").setInputFiles({
-      name: "reject.pdf",
-      mimeType: "application/pdf",
-      buffer: payload(1048576),
-    });
-    await rejected.staff
-      .getByRole("button", { name: "Reject file", exact: true })
-      .click();
-    await rejected.guest
+    await revoked.staff
       .getByText("Interrupted — resend needed", { exact: true })
       .waitFor({ timeout: 30000 });
-    console.log("PASS file rejection does not start a content stream");
-    const disabled = await setup({ disk: true, slow: 250 });
-    await send(disabled, "account-revoked.pdf", payload(20 * 1048576));
-    await disabled.staff.waitForFunction(() => window.testWrites.length >= 2);
+    console.log("PASS staff revocation interrupts automatic reception");
+    const disabled = await setup();
+    await slowReceive(disabled);
     const adminContext = await browser.newContext({
       extraHTTPHeaders: testHeaders(base),
     });
@@ -327,11 +395,9 @@ try {
         ).status(),
         200,
       );
-      await disabled.staff.waitForFunction(
-        () => window.testAborted,
-        {},
-        { timeout: 30000 },
-      );
+      await disabled.staff
+        .getByText("Interrupted — resend needed", { exact: true })
+        .waitFor({ timeout: 30000 });
       assert.equal(
         (
           await disabled.staff.request.post(
@@ -345,13 +411,25 @@ try {
         401,
       );
       console.log(
-        "PASS disabling the staff account cancels active streams and invalidates employee leases",
+        "PASS account revocation cancels automatic reception and leases",
       );
     } finally {
       await adminPage.request.post(base + "/api/admin/status", {
         data: { userId: employee.id, disabled: false },
       });
     }
+  }
+  if (!baseline && process.env.COMPAT_ONLY !== "1") {
+    const expiring = await setup({ clock: true });
+    await expiring.staff.clock.fastForward(600001);
+    await expiring.guest.clock.fastForward(600001);
+    await expiring.staff.getByText("Session ended", { exact: true }).waitFor();
+    await expiring.guest
+      .getByRole("heading", { name: "This session has ended" })
+      .waitFor();
+    assert.equal(await expiring.staff.locator("#files").isEnabled(), false);
+    assert.equal(await expiring.guest.locator("#files").isEnabled(), false);
+    console.log("PASS both browser sessions close at the ten-minute deadline");
   }
   assert.deepEqual(errors, []);
   await mkdir("test-results", { recursive: true });
