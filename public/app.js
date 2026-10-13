@@ -756,7 +756,10 @@ async function resolvePrintedDesk() {
 $("check-desk").onclick = () =>
   resolvePrintedDesk().catch((error) => message(error.message));
 async function preparePrintedQR() {
-  const link = new URL("/student", location.origin);
+  const origin = ["localhost", "127.0.0.1"].includes(location.hostname)
+    ? location.origin
+    : "https://uos-document-exchange.uos-document-exchange.workers.dev";
+  const link = new URL("/student", origin);
   link.hash = new URLSearchParams({
     desk: permanentDesk.id,
     code: permanentDesk.code,
@@ -904,8 +907,7 @@ async function begin(saved) {
   $("recipient-label").hidden = !desk;
   $("export").hidden = !desk;
   if (desk) {
-    const link = new URL(location.href);
-    link.pathname = "/student";
+    const link = new URL(permanentDesk.link);
     link.hash = new URLSearchParams({
       desk: permanentDesk.id,
       code: permanentDesk.code,
