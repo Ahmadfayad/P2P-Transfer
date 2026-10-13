@@ -32,7 +32,7 @@ async function setup({ direct = false, clock = false } = {}) {
       extraHTTPHeaders: testHeaders(base),
     }),
     guestContext = await browser.newContext({
-      extraHTTPHeaders: testHeaders(base),
+      extraHTTPHeaders: testHeaders(process.env.GUEST_ORIGIN || base),
     });
   contexts.push(staffContext, guestContext);
   for (const ctx of [staffContext, guestContext]) {
@@ -109,7 +109,13 @@ async function setup({ direct = false, clock = false } = {}) {
     request: staff.request,
     desk: invitation.desk,
   });
-  await guest.goto(link);
+  const guestLink = new URL(link);
+  if (process.env.GUEST_ORIGIN) {
+    const origin = new URL(process.env.GUEST_ORIGIN);
+    guestLink.protocol = origin.protocol;
+    guestLink.host = origin.host;
+  }
+  await guest.goto(guestLink.href);
   await guest.locator("#student-name").fill("Sensitive test student");
   if (!baseline) {
     await guest.locator("#student-id").fill("sensitive-id-987");
@@ -361,20 +367,16 @@ async function basic(options) {
       .click();
     await pair.guest.locator("#preview-content img").waitFor();
     await pair.guest.getByRole("button", { name: "Close preview" }).click();
-    await pair.staff
-      .locator("#files")
-      .setInputFiles({
-        name: "phone-preview.pdf",
-        mimeType: "application/pdf",
-        buffer: Buffer.from(pdfFixture()),
-      });
+    await pair.staff.locator("#files").setInputFiles({
+      name: "phone-preview.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from(pdfFixture()),
+    });
     await pair.guest.locator("#received-notice").waitFor();
     await pair.guest.locator("#view-received").click();
-    const pdfRow = pair.guest
-      .locator("#received-list .file")
-      .filter({
-        has: pair.guest.getByText("phone-preview.pdf", { exact: true }),
-      });
+    const pdfRow = pair.guest.locator("#received-list .file").filter({
+      has: pair.guest.getByText("phone-preview.pdf", { exact: true }),
+    });
     await pdfRow.getByRole("button", { name: "Preview", exact: true }).click();
     await pair.guest.waitForFunction(
       () =>
