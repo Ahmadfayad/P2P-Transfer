@@ -28,12 +28,14 @@ let exchange, session, lastState, timer, toastTimer, previewURL;
 let studentPhase = "checking",
   approval;
 const urls = new Map();
-const inactivePeers = new Set(), reconnectedPeers = new Set();
+const inactivePeers = new Set(),
+  reconnectedPeers = new Set();
 const peerLabel = (name) => name.trim().toLowerCase().replace(/\s+/g, " ");
 function returnNotice(peer) {
-  const matches = lastState?.peers.filter(
-    (p) => p.id !== peer.id && peerLabel(p.name) === peerLabel(peer.name),
-  ) || [];
+  const matches =
+    lastState?.peers.filter(
+      (p) => p.id !== peer.id && peerLabel(p.name) === peerLabel(peer.name),
+    ) || [];
   if (matches.some((p) => p.state !== "declined"))
     return "Another connection uses this name/ID — check identity";
   if (matches.length) return "Returning name/ID — check identity";
@@ -230,11 +232,15 @@ function blobURL(file) {
   if (!urls.has(file.id)) urls.set(file.id, URL.createObjectURL(file.blob));
   return urls.get(file.id);
 }
-function download(file) {
+async function download(file) {
   const a = element("a");
   a.href = blobURL(file);
   a.download = file.name;
   a.click();
+  if (file.transient && file.kind === "incoming") {
+    await exchange.saved(file, "download-initiated");
+    await renderFiles();
+  }
 }
 function preview(file) {
   const type = fileType(file.name);
@@ -275,6 +281,23 @@ async function removeFile(file) {
   )
     return;
   const transfer = lastState?.transfers.find((t) => t.id === file.id);
+  if (file.transient) {
+    exchange.jobs.get(file.id)?.abort();
+    if (transfer && !["received", "rejected"].includes(transfer.state))
+      await exchange.api("/transfers/" + file.id + "/reject", {
+        method: "POST",
+        body: {},
+      });
+    exchange.files.delete(file.id);
+    exchange.discarded ||= new Set();
+    exchange.discarded.add(file.id);
+    if (urls.has(file.id)) {
+      URL.revokeObjectURL(urls.get(file.id));
+      urls.delete(file.id);
+    }
+    await renderFiles();
+    return;
+  }
   if (transfer && !["received", "rejected"].includes(transfer.state))
     await exchange.api("/transfers/" + file.id + "/reject", {
       method: "POST",
@@ -292,9 +315,13 @@ async function removeFile(file) {
   await renderFiles();
 }
 async function renderFiles() {
-  const files = await db.all("files");
+  const files = [
+    ...(await db.all("files")),
+    ...(exchange ? exchange.files.values() : []),
+  ];
   for (const file of files) {
     if (
+      !file.transient &&
       !file.blob &&
       file.kind === "incoming" &&
       file.next === chunkCount(file.size) &&
@@ -333,6 +360,20 @@ function renderList(container, files, current) {
             : t?.state === "offered"
               ? "Waiting for recipient"
               : "Queued";
+    if (file.transient)
+      status = file.error
+        ? file.completed
+          ? "Received locally · receipt unavailable"
+          : "Interrupted — resend needed"
+        : file.saveState === "disk-saved"
+          ? "Saved to disk ✓"
+          : file.saveState === "download-initiated"
+            ? "Download initiated · disk save unconfirmed"
+            : received
+              ? "Received ✓ · download ready"
+              : t?.state === "offered"
+                ? "Waiting for recipient"
+                : "Streaming";
     if (!current)
       status = received
         ? "Received ✓ · saved"
@@ -363,17 +404,33 @@ function renderList(container, files, current) {
     if (t && !["received", "rejected"].includes(t.state)) {
       const progress = element("progress");
       progress.max = chunkCount(file.size);
-      progress.value = t.next;
+      progress.value = file.transient ? file.next || 0 : t.next;
       progress.setAttribute("aria-label", "Transfer progress for " + file.name);
       row.append(progress);
     }
-    const error = t?.error || exchange?.retries.get(file.id)?.message;
+    const error = t?.error || exchange?.retries?.get(file.id)?.message;
     if (error) row.append(element("p", error, "small"));
+    if (file.error) row.append(element("p", file.error, "small"));
     const actions = element("div", undefined, "actions");
+    if (file.transient && file.kind === "incoming" && !file.accepting && t?.state === "offered")
+      actions.append(
+        button("Receive & save", () => exchange.receiveFile(file.id)),
+        button("Reject file", () =>
+          exchange.api("/transfers/" + file.id + "/reject", {
+            method: "POST",
+            body: {},
+          }),
+        ),
+      );
     if (file.blob) {
       actions.append(
-        button(incoming ? "Save a copy" : "Save original", () =>
-          download(file),
+        button(
+          incoming
+            ? file.transient
+              ? "Download document"
+              : "Save a copy"
+            : "Save original",
+          () => download(file),
         ),
       );
       if (
@@ -423,10 +480,10 @@ function renderState(state) {
     );
   }
   $("send-note").textContent = approved
-    ? "Files retry automatically after a temporary interruption. Wait for “Received” before closing."
+    ? "New files are streamed temporarily. Keep both pages open; after a refresh or interruption, resend the file."
     : own?.state === "declined"
       ? "The desk declined this connection. Ask staff for help."
-      : "Waiting for staff approval. File exchange will open after your request is accepted.";
+      : "File access is locked until staff approve you.";
   $("connections").replaceChildren();
   if (desk) {
     const selected = $("recipient").value;
@@ -437,7 +494,8 @@ function renderState(state) {
     const activePeers = lastState.peers.filter((p) => p.state !== "declined");
     const endedPeers = lastState.peers.filter((p) => p.state === "declined");
     $("ended-connections").hidden = !endedPeers.length;
-    $("ended-connections-summary").textContent = `Ended connections (${endedPeers.length})`;
+    $("ended-connections-summary").textContent =
+      `Ended connections (${endedPeers.length})`;
     $("ended-connections-list").replaceChildren();
     const endedNames = new Map();
     for (const peer of endedPeers) {
@@ -448,9 +506,14 @@ function renderState(state) {
     }
     for (const group of endedNames.values()) {
       const row = element("div", undefined, "peer");
-      row.append(element("strong", group.name), element("p",
-        `${group.count} ended or declined request${group.count === 1 ? "" : "s"}`,
-        "small"));
+      row.append(
+        element("strong", group.name),
+        element(
+          "p",
+          `${group.count} ended or declined request${group.count === 1 ? "" : "s"}`,
+          "small",
+        ),
+      );
       $("ended-connections-list").append(row);
     }
     for (const peer of activePeers) {
@@ -468,15 +531,18 @@ function renderState(state) {
             ? "Wants to connect"
             : peer.state === "approved"
               ? "Approved" +
-                (inactive
-                  ? " · page inactive; waiting to reconnect"
+                (Date.now() - peer.seen > 60000
+                  ? " · waiting for their page"
                   : " · page active")
               : "Declined",
           "small",
         ),
       );
-      const notice = returnNotice(peer) ||
-        (!inactive && reconnectedPeers.has(peer.id) ? "Reconnected — same session" : "");
+      const notice =
+        returnNotice(peer) ||
+        (!inactive && reconnectedPeers.has(peer.id)
+          ? "Reconnected — same session"
+          : "");
       if (notice) row.append(element("span", notice, "connection-badge"));
       if (peer.state === "pending") {
         row.append(button("Review request", () => showApproval(peer)));
@@ -526,7 +592,9 @@ function renderState(state) {
   $("route-label").textContent = [...exchange.direct.peers.keys()].some(
     (peer) => exchange.direct.available(peer),
   )
-    ? exchange.direct.pilot ? "Encrypted relay + HTTPS recovery" : "Direct + HTTPS recovery"
+    ? exchange.direct.pilot
+      ? "Encrypted relay + HTTPS recovery"
+      : "Direct + HTTPS recovery"
     : "Encrypted HTTPS";
   renderFiles().catch((e) => message(e.message));
 }
@@ -552,7 +620,7 @@ async function poll(instance) {
       instance.lastProgress = Date.now();
     }
     delay = active
-      ? 250
+      ? 3000
       : lastState?.peers.some((p) => p.state === "pending")
         ? 3000
         : 15000;
@@ -593,7 +661,11 @@ async function poll(instance) {
   instance.polling = false;
   timer = setTimeout(
     () => poll(instance),
-    instance.wakeRequested ? 250 : delay,
+    instance.wakeRequested
+      ? 250
+      : instance.longPoll && !instance.failures
+        ? 0
+        : delay,
   );
 }
 async function begin(saved) {
@@ -608,16 +680,20 @@ async function begin(saved) {
   await db.put("sessions", saved);
   sessionStorage.setItem(sessionKey, saved.id);
   localStorage.setItem(sessionKey, saved.id);
-  const instance = new Exchange(session, (state) => {
-    if (exchange === instance) renderState(state);
-  }, () => {
-    if (exchange !== instance || instance.stopped) return;
-    instance.wakeRequested = true;
-    clearTimeout(timer);
-    if (!instance.polling) timer = setTimeout(() => poll(instance), 25);
-  });
+  const instance = new Exchange(
+    session,
+    (state) => {
+      if (exchange === instance) renderState(state);
+    },
+    () => {
+      if (exchange !== instance || instance.stopped) return;
+      instance.wakeRequested = true;
+      clearTimeout(timer);
+      if (!instance.polling) timer = setTimeout(() => poll(instance), 25);
+    },
+  );
   exchange = instance;
-  instance.watch();
+  instance.watch?.();
   $("welcome").hidden = true;
   $("workspace").hidden = guest;
   const desk = session.self === "desk";
@@ -710,6 +786,8 @@ $("join-form").onsubmit = (event) => {
         method: "POST",
         body: {
           name: $("student-name").value.trim(),
+          email: $("student-email").value.trim(),
+          studentId: $("student-id").value.trim(),
           publicKey: keys.publicKey,
         },
         headers: { "X-Invite": invitation.invite, "X-Guest-Access": "1" },
@@ -814,7 +892,10 @@ for (const name of ["dragover", "dragleave", "drop"])
 $("export").onclick = async () => {
   const rows = [
     ["File", "Bytes", "From", "To", "Received at"],
-    ...(await db.all("files"))
+    ...[
+      ...(await db.all("files")),
+      ...(exchange ? exchange.files.values() : []),
+    ]
       .filter((f) => f.received)
       .map((f) => [
         f.name,

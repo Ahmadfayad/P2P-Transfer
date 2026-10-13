@@ -1127,3 +1127,30 @@ footer {
     padding: 24px;
   }
 }
+.waiting-phase {
+  text-align: center;
+  padding: 36px;
+  margin-bottom: 24px;
+}
+.spinner {
+  display: inline-block;
+  width: 36px;
+  height: 36px;
+  border: 4px solid #e1e6f7;
+  border-top-color: #565fc5;
+  border-radius: 50%;
+  animation: waiting-spin 1s linear infinite;
+}
+@keyframes waiting-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+#student-dialog {
+  max-width: min(480px, calc(100vw - 32px));
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

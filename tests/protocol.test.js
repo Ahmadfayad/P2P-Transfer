@@ -156,7 +156,7 @@ test("QR guests need an invitation and private peer token, cannot impersonate a 
   database.close();
 });
 
-test("authenticated relay rejects impersonation, supports retry and requires recipient receipt", async () => {
+test("authenticated streaming rejects impersonation, forbids persistence and requires recipient receipt", async () => {
   const { hub, database } = service();
   const api = async (path, method = "GET", body, token, headers = {}) => {
     if (path !== "/rooms")
@@ -258,7 +258,13 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
     403,
   );
   const id = crypto.randomUUID(),
-    file = { id, name: "file.pdf", size: CHUNK_SIZE + 8, to: "desk" };
+    file = {
+      id,
+      name: "file.pdf",
+      size: CHUNK_SIZE + 8,
+      to: "desk",
+      mode: "stream-v1",
+    };
   assert.equal(
     (await api(base + "/transfers", "POST", file, student.token)).status,
     403,
@@ -299,22 +305,7 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
     409,
   );
   assert.equal((await api(t + "/accept", "POST", {}, room.token)).status, 200);
-  assert.equal(
-    (
-      await api(
-        t + "/chunks/0",
-        "PUT",
-        new Uint8Array(CHUNK_SIZE + 28),
-        stranger.token,
-      )
-    ).status,
-    404,
-  );
-  assert.equal(
-    (await api(t + "/chunks/0", "PUT", new Uint8Array(30), student.token))
-      .status,
-    400,
-  );
+
   assert.equal(
     (
       await api(
@@ -324,69 +315,50 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
         student.token,
       )
     ).status,
-    201,
-  );
-  assert.equal(
-    (
-      await api(
-        t + "/chunks/0",
-        "PUT",
-        new Uint8Array(CHUNK_SIZE + 28),
-        student.token,
-      )
-    ).status,
-    200,
-  );
-  assert.equal(
-    (await api(t + "/chunks/0", "GET", undefined, student.token)).status,
-    403,
-  );
-  assert.equal(
-    (await api(t + "/chunks/0", "GET", undefined, room.token)).status,
-    200,
-  );
-  assert.equal(
-    (await api(t + "/ack", "POST", { next: 2 }, room.token)).status,
-    400,
+    426,
   );
   assert.equal(
     (
       await api(
         t + "/complete",
         "POST",
-        { size: file.size, integrity: "verified" },
+        { size: file.size, integrity: "verified", saveState: "received" },
         room.token,
       )
     ).status,
     409,
   );
+  await api(base + "/lease", "POST", {}, room.token);
   assert.equal(
-    (await api(t + "/ack", "POST", { next: 1 }, room.token)).status,
+    (
+      await api(t + "/stream", "GET", undefined, stranger.token, {
+        "X-Stream-Index": "0",
+      })
+    ).status,
+    404,
+  );
+  const response = await api(t + "/stream", "GET", undefined, room.token, {
+    "X-Stream-Index": "0",
+  });
+  assert.equal(response.status, 200);
+  const incoming = response.arrayBuffer();
+  const cipher = new Uint8Array(file.size + 56).fill(42);
+  assert.equal(
+    (
+      await api(t + "/stream", "POST", cipher, student.token, {
+        "X-Stream-Index": "0",
+      })
+    ).status,
     200,
   );
-  assert.equal(
-    (await api(t + "/ack", "POST", { next: 1 }, room.token)).status,
-    200,
-  );
-  assert.equal(
-    (await api(t + "/chunks/0", "GET", undefined, room.token)).status,
-    204,
-  );
-  assert.equal(
-    (await api(t + "/chunks/1", "PUT", new Uint8Array(36), student.token))
-      .status,
-    201,
-  );
-  assert.equal(
-    (await api(t + "/ack", "POST", { next: 2 }, room.token)).status,
-    200,
-  );
+  assert.deepEqual(new Uint8Array(await incoming), cipher);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM chunks").get().n, 0);
   assert.equal(
     (
       await api(
         t + "/complete",
         "POST",
-        { size: file.size, integrity: "verified" },
+        { size: file.size, integrity: "verified", saveState: "received" },
         student.token,
       )
     ).status,
@@ -397,18 +369,7 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
       await api(
         t + "/complete",
         "POST",
-        { size: file.size, integrity: "verified" },
-        room.token,
-      )
-    ).status,
-    200,
-  );
-  assert.equal(
-    (
-      await api(
-        t + "/complete",
-        "POST",
-        { size: file.size, integrity: "verified" },
+        { size: file.size, integrity: "verified", saveState: "disk-saved" },
         room.token,
       )
     ).status,
@@ -417,6 +378,7 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
   const returned = {
     id: crypto.randomUUID(),
     name: "return.pdf",
+    mode: "stream-v1",
     size: 8,
     to: student.id,
   };
@@ -437,7 +399,79 @@ test("authenticated relay rejects impersonation, supports retry and requires rec
   ).json();
   assert.equal(otherState.transfers.length, 0);
   assert.equal(state.peers.length, 1);
+  const lease = await (
+    await api(base + "/lease", "POST", {}, room.token)
+  ).json();
+  const env = { HUB: { idFromName: () => "hub", get: () => hub } };
+  const leasedRequest = (secret) =>
+    worker.fetch(
+      new Request("https://example.test/api" + base + "/state", {
+        headers: {
+          Authorization: "Bearer " + room.token,
+          "X-Stream-Lease": secret,
+          "X-Account-ID": "forged-account",
+          "X-Account-Role": "admin",
+        },
+      }),
+      env,
+    );
+  assert.equal((await leasedRequest("fake-lease")).status, 401);
+  assert.equal((await leasedRequest(lease.token)).status, 200);
+  const current = await (
+    await api(base + "/state", "GET", undefined, room.token)
+  ).json();
+  let woke = false;
+  const waiting = api(
+    base + "/state?wait=1&version=" + current.room.version,
+    "GET",
+    undefined,
+    room.token,
+  ).then((r) => {
+    woke = true;
+    return r;
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(woke, false);
+  await api(
+    base + "/peers/" + student.id,
+    "POST",
+    { state: "approved" },
+    room.token,
+  );
+  assert.equal((await waiting).status, 200);
+  await hub.fetch(
+    new Request("https://internal/revoke-account", {
+      method: "POST",
+      body: JSON.stringify({ account: "test-account" }),
+    }),
+  );
+  assert.equal((await leasedRequest(lease.token)).status, 401);
+  const legacy = crypto.randomUUID();
+  database
+    .prepare(
+      "INSERT INTO transfers(id,room,sender,recipient,name,size,state,created) VALUES(?,?,?,?,?,?,?,?)",
+    )
+    .run(
+      legacy,
+      room.id,
+      student.id,
+      "desk",
+      "legacy.pdf",
+      8,
+      "accepted",
+      Date.now(),
+    );
+  database
+    .prepare("INSERT INTO chunks VALUES(?,?,?)")
+    .run(legacy, 0, Buffer.from("legacy bytes"));
   const hub2 = new TransferHub(hub.ctx, hub.env);
+  assert.equal(
+    Buffer.from(
+      database.prepare("SELECT body FROM chunks WHERE transfer = ?").get(legacy)
+        .body,
+    ).toString(),
+    "legacy bytes",
+  );
   assert.equal(
     (
       await hub2.fetch(
@@ -556,7 +590,9 @@ test("ended visitors release capacity without deleting transfer history", async 
     const peers = Array.from({ length: 20 }, () => crypto.randomUUID());
     for (const id of peers)
       database
-        .prepare("INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .prepare(
+          "INSERT INTO peers(room,id,token,name,public_key,state,seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
         .run(
           room.id,
           id,
@@ -624,7 +660,9 @@ test("ended visitors release capacity without deleting transfer history", async 
     for (let i = 21; i < 200; i++) {
       const id = crypto.randomUUID();
       database
-        .prepare("INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .prepare(
+          "INSERT INTO peers(room,id,token,name,public_key,state,seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
         .run(
           room.id,
           id,
@@ -747,6 +785,7 @@ test("visitors can withdraw only their own request; stale approval cannot revive
           await api("/transfers", guestHeaders, {
             id,
             name: "saved.pdf",
+            mode: "stream-v1",
             size: 8,
             to: "desk",
           })
@@ -757,32 +796,8 @@ test("visitors can withdraw only their own request; stale approval cannot revive
         (await api(`/transfers/${id}/accept`, staffHeaders)).status,
         200,
       );
-      const upload = await hub.fetch(
-        new Request(
-          `https://test/api/rooms/${room.id}/transfers/${id}/chunks/0`,
-          {
-            method: "PUT",
-            headers: guestHeaders,
-            body: new Uint8Array(36),
-          },
-        ),
-      );
-      assert.equal(upload.status, 201);
-      if (id === received) {
-        assert.equal(
-          (await api(`/transfers/${id}/ack`, staffHeaders, { next: 1 })).status,
-          200,
-        );
-        assert.equal(
-          (
-            await api(`/transfers/${id}/complete`, staffHeaders, {
-              size: 8,
-              integrity: "verified",
-            })
-          ).status,
-          200,
-        );
-      }
+      assert.equal((await api(`/transfers/${id}/progress`, staffHeaders, { next: 1 })).status, 200);
+      if (id === received) assert.equal((await api(`/transfers/${id}/complete`, staffHeaders, {size:8,integrity:"verified",saveState:"received"})).status,200);
     }
     assert.equal(
       (await api("/leave", guestHeaders, { peer: second.id })).status,

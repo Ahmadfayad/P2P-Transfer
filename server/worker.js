@@ -13,6 +13,7 @@ import {
 import { createAuth, permittedRole, publicAuthPaths } from "./auth.js";
 import { parseUsersCSV } from "../public/user-csv.js";
 import { turnPilot } from "./turn.js";
+import { StreamRelay, BATCH_FRAMES } from "./stream-relay.js";
 
 const SESSION_MS = 8 * 60 * 60 * 1000;
 const MAX_BUFFER = 32 * 1024 * 1024;
@@ -92,15 +93,25 @@ export default {
     const incoming = new Headers(request.headers);
     incoming.set("X-Request-ID", requestId);
     request = new Request(request, { headers: incoming });
-    const wakeUpgrade = request.method === "GET" &&
+    const wakeUpgrade =
+      request.method === "GET" &&
       /^\/api\/rooms\/[0-9a-f-]{36}\/wake$/.test(url.pathname) &&
       request.headers.get("Upgrade")?.toLowerCase() === "websocket";
-    const protocols = (request.headers.get("Sec-WebSocket-Protocol") || "").split(",").map((v) => v.trim());
-    if (wakeUpgrade && protocols.length === 2 &&
-        ["uos-staff-v1", "uos-guest-v1"].includes(protocols[0]) && /^[a-f0-9]{64}$/.test(protocols[1])) {
+    const protocols = (request.headers.get("Sec-WebSocket-Protocol") || "")
+      .split(",")
+      .map((v) => v.trim());
+    if (
+      wakeUpgrade &&
+      protocols.length === 2 &&
+      ["uos-staff-v1", "uos-guest-v1"].includes(protocols[0]) &&
+      /^[a-f0-9]{64}$/.test(protocols[1])
+    ) {
       const headers = new Headers(request.headers);
       headers.set("Authorization", "Bearer " + protocols[1]);
-      headers.set("X-Guest-Access", protocols[0] === "uos-guest-v1" ? "1" : "0");
+      headers.set(
+        "X-Guest-Access",
+        protocols[0] === "uos-guest-v1" ? "1" : "0",
+      );
       request = new Request(request, { headers });
     }
     let response;
@@ -116,11 +127,13 @@ export default {
           403,
         );
       else if (url.pathname === "/api/health")
-        response = json({ ok: true, protocol: 3 });
+        response = json({ ok: true, protocol: 4 });
       else {
         try {
           if (
-            request.headers.get("X-Guest-Access") === "1" &&
+            (request.headers.get("X-Guest-Access") === "1" ||
+              (request.headers.has("X-Stream-Lease") &&
+                !url.pathname.endsWith("/lease"))) &&
             /^\/api\/rooms\/[0-9a-f-]{36}\//.test(url.pathname)
           ) {
             const headers = new Headers(request.headers);
@@ -131,7 +144,10 @@ export default {
               "X-Setup-Key",
             ])
               headers.delete(name);
-            headers.set("X-Access-Mode", "guest");
+            headers.set(
+              "X-Access-Mode",
+              request.headers.get("X-Guest-Access") === "1" ? "guest" : "lease",
+            );
             response = await env.HUB.get(env.HUB.idFromName("exchange")).fetch(
               new Request(request, { headers }),
             );
@@ -181,7 +197,20 @@ export default {
                   body,
                 });
               }
+              const revoking = [
+                "/api/auth/sign-out",
+                "/api/auth/change-password",
+              ].includes(url.pathname)
+                ? await auth.api.getSession({ headers: request.headers })
+                : null;
               response = await auth.handler(request);
+              if (response.ok && revoking?.user)
+                await env.HUB.get(env.HUB.idFromName("exchange")).fetch(
+                  new Request("https://internal/revoke-account", {
+                    method: "POST",
+                    body: JSON.stringify({ account: revoking.user.id }),
+                  }),
+                );
             } else {
               const account = await auth.api.getSession({
                 headers: request.headers,
@@ -205,9 +234,27 @@ export default {
                 response = await env.HUB.get(
                   env.HUB.idFromName("exchange"),
                 ).fetch(new Request("https://internal/system-log"));
-              } else if (url.pathname.startsWith("/api/admin/"))
+              } else if (url.pathname.startsWith("/api/admin/")) {
+                const mutation =
+                  request.method === "POST" ? request.clone() : null;
                 response = await administration(request, auth, account.user);
-              else {
+                if (
+                  response.ok &&
+                  [
+                    "/api/admin/role",
+                    "/api/admin/status",
+                    "/api/admin/password",
+                  ].includes(url.pathname)
+                ) {
+                  const body = await mutation.json();
+                  await env.HUB.get(env.HUB.idFromName("exchange")).fetch(
+                    new Request("https://internal/revoke-account", {
+                      method: "POST",
+                      body: JSON.stringify({ account: body.userId }),
+                    }),
+                  );
+                }
+              } else {
                 if (url.pathname === "/api/rooms" && request.method === "POST")
                   check(
                     ["admin", "staff"].includes(account.user.role),
@@ -254,7 +301,7 @@ export default {
       );
     const headers = new Headers(response.headers);
     headers.set("X-Request-ID", requestId);
-    headers.set("X-App-Version", "turn-pilot-v1");
+    headers.set("X-App-Version", "stream-v1");
     if (
       url.pathname.startsWith("/api/") &&
       response.status >= 400 &&
@@ -284,7 +331,12 @@ export default {
       "Content-Security-Policy",
       `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
     );
-    if (response.status === 101) return new Response(null, { status: 101, headers, webSocket: response.webSocket });
+    if (response.status === 101)
+      return new Response(null, {
+        status: 101,
+        headers,
+        webSocket: response.webSocket,
+      });
     return new Response(response.body, { status: response.status, headers });
   },
 };
@@ -421,9 +473,53 @@ export class TransferHub {
       CREATE INDEX IF NOT EXISTS transfers_recipient ON transfers(room, recipient);
       CREATE INDEX IF NOT EXISTS events_target ON events(room, recipient, id);
     `);
+    this.relay = new StreamRelay();
+    this.leases = new Map();
+    this.versions = new Map();
+    this.waiters = new Map();
+    for (const [table, name, type] of [
+      ["transfers", "mode", "TEXT DEFAULT 'legacy'"],
+      ["transfers", "save_state", "TEXT DEFAULT ''"],
+      ["peers", "email", "TEXT DEFAULT ''"],
+      ["peers", "student_id", "TEXT DEFAULT ''"],
+    ]) {
+      if (
+        !this.rows("PRAGMA table_info(" + table + ")").some(
+          (column) => column.name === name,
+        )
+      )
+        this.sql.exec(
+          "ALTER TABLE " + table + " ADD COLUMN " + name + " " + type,
+        );
+    }
   }
   rows(query, ...args) {
     return [...this.sql.exec(query, ...args)];
+  }
+  wake(room) {
+    this.versions.set(room, (this.versions.get(room) || 0) + 1);
+    for (const done of this.waiters.get(room) || []) done();
+  }
+  async wait(room) {
+    const pending = [...this.waiters.values()].reduce(
+      (n, set) => n + set.size,
+      0,
+    );
+    check(pending < 100, 429, "Connection updates are busy. Retry shortly.");
+    let timer, finish;
+    const set = this.waiters.get(room) || new Set();
+    this.waiters.set(room, set);
+    try {
+      await new Promise((resolve) => {
+        finish = resolve;
+        set.add(finish);
+        timer = setTimeout(resolve, 20000);
+      });
+    } finally {
+      clearTimeout(timer);
+      set.delete(finish);
+      if (!set.size) this.waiters.delete(room);
+    }
   }
   one(query, ...args) {
     return this.rows(query, ...args)[0];
@@ -437,20 +533,41 @@ export class TransferHub {
       try {
         const info = ws.deserializeAttachment();
         const active = room?.expires > Date.now() && info.expires > Date.now();
-        if (!active) { ws.close(1000, "Session changed"); continue; }
-        if (!targets || targets.includes(info.who)) ws.send("changed");
-        if (info.who !== "desk" &&
-            this.one("SELECT state FROM peers WHERE id = ? AND room = ?", info.who, roomId)?.state === "declined")
+        if (!active) {
           ws.close(1000, "Session changed");
-      } catch { /* A closed notification socket cannot block a saved transfer. */ }
+          continue;
+        }
+        if (!targets || targets.includes(info.who)) ws.send("changed");
+        if (
+          info.who !== "desk" &&
+          this.one(
+            "SELECT state FROM peers WHERE id = ? AND room = ?",
+            info.who,
+            roomId,
+          )?.state === "declined"
+        )
+          ws.close(1000, "Session changed");
+      } catch {
+        /* A closed notification socket cannot block a saved transfer. */
+      }
     }
   }
-  webSocketMessage(ws) { ws.close(1008, "Notifications only"); }
-  webSocketClose(ws) { ws.close(1000, "Closed"); }
-  webSocketError(ws) { ws.close(1011, "Unavailable"); }
+  webSocketMessage(ws) {
+    ws.close(1008, "Notifications only");
+  }
+  webSocketClose(ws) {
+    ws.close(1000, "Closed");
+  }
+  webSocketError(ws) {
+    ws.close(1011, "Unavailable");
+  }
   cleanup() {
     const now = Date.now();
-    this.sql.exec("DELETE FROM turn_transfers WHERE expires <= ? OR room NOT IN (SELECT id FROM rooms WHERE expires > ?)", now, now);
+    this.sql.exec(
+      "DELETE FROM turn_transfers WHERE expires <= ? OR room NOT IN (SELECT id FROM rooms WHERE expires > ?)",
+      now,
+      now,
+    );
     this.sql.exec(
       "DELETE FROM chunks WHERE transfer IN (SELECT id FROM transfers WHERE room IN (SELECT id FROM rooms WHERE expires <= ?))",
       now,
@@ -516,6 +633,9 @@ export class TransferHub {
     return t;
   }
   declinePeer(room, peer, reason) {
+    this.relay.cancelWhere(
+      (t) => t.room === room && (t.sender === peer || t.recipient === peer),
+    );
     this.sql.exec(
       "UPDATE peers SET state = 'declined' WHERE room = ? AND id = ?",
       room,
@@ -551,6 +671,13 @@ export class TransferHub {
       );
     }
     const path = new URL(request.url).pathname;
+    if (
+      response.ok &&
+      request.method !== "GET" &&
+      path.startsWith("/api/rooms/") &&
+      !path.endsWith("/lease")
+    )
+      this.wake(path.split("/")[3]);
     if (
       path.startsWith("/api/rooms/") &&
       !path.endsWith("/diagnostics") &&
@@ -594,9 +721,11 @@ export class TransferHub {
       );
     const segments = url.pathname.split("/").filter(Boolean);
     const chunkRequest = method === "PUT" && segments[5] === "chunks";
-    const bytes = ["POST", "PUT", "DELETE"].includes(method)
-      ? await readBody(request, chunkRequest ? CHUNK_SIZE + 28 : 32768)
-      : new Uint8Array();
+    const streamRequest = method === "POST" && segments[5] === "stream";
+    const bytes =
+      !streamRequest && ["POST", "PUT", "DELETE"].includes(method)
+        ? await readBody(request, chunkRequest ? CHUNK_SIZE + 28 : 32768)
+        : new Uint8Array();
     let body = {};
     if (bytes.length && !chunkRequest) {
       try {
@@ -630,6 +759,26 @@ export class TransferHub {
       );
       return json({ ok: true });
     }
+    if (url.pathname === "/revoke-account" && method === "POST") {
+      for (const room of this.rows(
+        "SELECT room FROM account_bindings WHERE account = ? AND peer = 'desk'",
+        body.account,
+      )) {
+        this.relay.cancelWhere((t) => t.room === room.room);
+        this.sql.exec(
+          "UPDATE transfers SET state = 'rejected', error = 'Employee access revoked; resend after reconnecting.' WHERE room = ? AND state NOT IN ('received', 'rejected')",
+          room.room,
+        );
+        this.wake(room.room);
+      }
+      for (const [key, lease] of this.leases)
+        if (lease.account === body.account) {
+          this.leases.delete(key);
+          this.wake(key.split(":")[0]);
+          this.relay.cancelWhere((t) => t.room === key.split(":")[0]);
+        }
+      return json({ revoked: true });
+    }
     if (method === "POST" && url.pathname === "/login-limit") {
       check(
         typeof body.email === "string" && body.email.length <= 254,
@@ -659,6 +808,22 @@ export class TransferHub {
         "Enter a desk name and a valid public key.",
       );
       await validatePublicKey(body.publicKey);
+      check(
+        body.email === undefined ||
+          body.email === "" ||
+          (typeof body.email === "string" &&
+            body.email.length <= 254 &&
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)),
+        400,
+        "Enter a valid email address.",
+      );
+      check(
+        body.studentId === undefined ||
+          body.studentId === "" ||
+          label(body.studentId),
+        400,
+        "Enter a valid student ID.",
+      );
       const id = crypto.randomUUID(),
         owner = token(),
         invite = token(),
@@ -727,6 +892,22 @@ export class TransferHub {
         400,
         "Enter a name or student ID.",
       );
+      check(
+        body.email === undefined ||
+          body.email === "" ||
+          (typeof body.email === "string" &&
+            body.email.length <= 254 &&
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)),
+        400,
+        "Enter a valid email address.",
+      );
+      check(
+        body.studentId === undefined ||
+          body.studentId === "" ||
+          label(body.studentId),
+        400,
+        "Enter a valid student ID.",
+      );
       await validatePublicKey(body.publicKey);
       const id = crypto.randomUUID(),
         secret = token(),
@@ -752,7 +933,7 @@ export class TransferHub {
         "This session has reached its visitor history limit. Open a new desk session.",
       );
       this.sql.exec(
-        "INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO peers(room, id, token, name, public_key, state, seen, email, student_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         roomId,
         id,
         secretHash,
@@ -760,6 +941,14 @@ export class TransferHub {
         JSON.stringify(publicKey(body.publicKey)),
         "pending",
         Date.now(),
+        typeof body.email === "string" &&
+          body.email.length <= 254 &&
+          /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)
+          ? body.email
+          : "",
+        typeof body.studentId === "string" && label(body.studentId)
+          ? body.studentId.trim()
+          : "",
       );
       this.sql.exec(
         "INSERT INTO account_bindings VALUES (?, ?, ?)",
@@ -796,7 +985,14 @@ export class TransferHub {
       );
       who = peer.id;
     }
-    if (who === "desk")
+    const lease = this.leases.get(roomId + ":" + who);
+    const leased =
+      request.headers.get("X-Access-Mode") === "lease" &&
+      lease?.expires > Date.now() &&
+      lease.token === request.headers.get("X-Stream-Lease");
+    if (request.headers.get("X-Access-Mode") === "lease")
+      check(leased, 401, "Employee connection expired. Sign in again.");
+    if (who === "desk" && !leased)
       check(
         ["admin", "staff"].includes(request.headers.get("X-Account-Role")),
         403,
@@ -824,31 +1020,80 @@ export class TransferHub {
         )?.account) ===
         (request.headers.get("X-Access-Mode") === "guest" && who !== "desk"
           ? "guest:" + who
-          : request.headers.get("X-Account-ID")),
+          : leased
+            ? lease.account
+            : request.headers.get("X-Account-ID")),
       403,
       "This desk session belongs to another account. Open a new session.",
     );
     if (method === "GET" && segments[3] === "wake" && segments.length === 4) {
-      const protocols = (request.headers.get("Sec-WebSocket-Protocol") || "").split(",").map((v) => v.trim());
+      const protocols = (request.headers.get("Sec-WebSocket-Protocol") || "")
+        .split(",")
+        .map((v) => v.trim());
       const protocol = who === "desk" ? "uos-staff-v1" : "uos-guest-v1";
-      check(request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
-        protocols.length === 2 && protocols[0] === protocol && /^[a-f0-9]{64}$/.test(protocols[1]), 400, "Invalid notification connection.");
-      check(!peer || peer.state !== "declined", 403, "This connection has ended.");
-      check(this.ctx.acceptWebSocket && typeof WebSocketPair !== "undefined", 503, "Notifications unavailable.");
+      check(
+        request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
+          protocols.length === 2 &&
+          protocols[0] === protocol &&
+          /^[a-f0-9]{64}$/.test(protocols[1]),
+        400,
+        "Invalid notification connection.",
+      );
+      check(
+        !peer || peer.state !== "declined",
+        403,
+        "This connection has ended.",
+      );
+      check(
+        this.ctx.acceptWebSocket && typeof WebSocketPair !== "undefined",
+        503,
+        "Notifications unavailable.",
+      );
       this.rate("wake:" + roomId + ":" + who, 60);
       const tag = "peer:" + roomId + ":" + who;
       const previous = this.ctx.getWebSockets(tag);
       if (previous.length >= 2) previous[0].close(1000, "Connection replaced");
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1], ["room:" + roomId, tag]);
-      pair[1].serializeAttachment({ room: roomId, who, expires: Math.min(room.expires, Date.now() + 600000) });
-      return new Response(null, { status: 101, webSocket: pair[0], headers: { "Sec-WebSocket-Protocol": protocol } });
+      pair[1].serializeAttachment({
+        room: roomId,
+        who,
+        expires: Math.min(room.expires, Date.now() + 600000),
+      });
+      return new Response(null, {
+        status: 101,
+        webSocket: pair[0],
+        headers: { "Sec-WebSocket-Protocol": protocol },
+      });
     }
     if (method === "GET" && segments[3] === "ice" && segments.length === 4) {
       check(this.approved(roomId, who), 403, "Wait for desk approval.");
       this.rate("ice:" + roomId + ":" + who, 12);
       const pilot = turnPilot(this.env);
-      return json(pilot ? { enabled: true, iceServers: pilot.iceServers, expires: pilot.expires, iceTransportPolicy: "relay" } : { enabled: false });
+      return json(
+        pilot
+          ? {
+              enabled: true,
+              iceServers: pilot.iceServers,
+              expires: pilot.expires,
+              iceTransportPolicy: "relay",
+            }
+          : { enabled: false },
+      );
+    }
+    if (method === "POST" && segments[3] === "lease" && segments.length === 4) {
+      check(
+        who === "desk" && request.headers.get("X-Account-ID"),
+        403,
+        "Employee access required.",
+      );
+      const entry = lease || {
+        token: token(),
+        account: request.headers.get("X-Account-ID"),
+      };
+      entry.expires = Date.now() + 90000;
+      this.leases.set(roomId + ":" + who, entry);
+      return json({ token: entry.token, expires: entry.expires });
     }
     if (
       method === "GET" &&
@@ -868,13 +1113,33 @@ export class TransferHub {
       );
     }
     if (method === "GET" && segments[3] === "state" && segments.length === 4) {
+      if (
+        url.searchParams.get("wait") === "1" &&
+        url.searchParams.get("version") ===
+          String(this.versions.get(roomId) || 0)
+      ) {
+        await this.wait(roomId);
+        check(
+          this.one("SELECT expires FROM rooms WHERE id = ?", roomId)?.expires >
+            Date.now(),
+          410,
+          "Session ended.",
+        );
+        if (leased)
+          check(
+            this.leases.get(roomId + ":" + who) === lease &&
+              lease.expires > Date.now(),
+            401,
+            "Employee access revoked.",
+          );
+      }
       const since = Number(url.searchParams.get("since") || 0);
       check(
         Number.isSafeInteger(since) && since >= 0,
         400,
         "Invalid event cursor.",
       );
-      if (peer)
+      if (peer && Date.now() - peer.seen > 30000)
         this.sql.exec(
           "UPDATE peers SET seen = ? WHERE id = ?",
           Date.now(),
@@ -883,7 +1148,7 @@ export class TransferHub {
       const peers =
         who === "desk"
           ? this.rows(
-              "SELECT id, name, public_key, state, seen FROM peers WHERE room = ?",
+              "SELECT id, name, public_key, state, seen, email, student_id FROM peers WHERE room = ?",
               roomId,
             )
           : [
@@ -912,9 +1177,18 @@ export class TransferHub {
         since,
       );
       const pilot = turnPilot(this.env);
-      const allowed = new Set(pilot ? this.rows("SELECT id FROM turn_transfers WHERE room = ? AND expires > ?", roomId, Date.now()).map((r) => r.id) : []);
+      const allowed = new Set(
+        pilot
+          ? this.rows(
+              "SELECT id FROM turn_transfers WHERE room = ? AND expires > ?",
+              roomId,
+              Date.now(),
+            ).map((r) => r.id)
+          : [],
+      );
       return json({
         room: {
+          version: this.versions.get(roomId) || 0,
           id: roomId,
           name: room.name,
           expires: room.expires,
@@ -928,8 +1202,13 @@ export class TransferHub {
           publicKey: JSON.parse(p.public_key),
           state: p.state,
           seen: p.seen,
+          email: p.email || "",
+          studentId: p.student_id || "",
         })),
-        transfers: transfers.map((t) => ({ ...t, turnAllowed: allowed.has(t.id) })),
+        transfers: transfers.map((t) => ({
+          ...t,
+          turnAllowed: allowed.has(t.id),
+        })),
         turnEnabled: Boolean(pilot),
         events: events.map((e) => ({
           id: e.id,
@@ -946,6 +1225,7 @@ export class TransferHub {
     }
     if (method === "DELETE" && segments.length === 3) {
       check(who === "desk", 403, "Only the desk can end a session.");
+      this.relay.cancelWhere((t) => t.room === roomId);
       this.sql.exec("UPDATE rooms SET expires = 0 WHERE id = ?", roomId);
       this.cleanup();
       this.notify(roomId);
@@ -1076,6 +1356,11 @@ export class TransferHub {
         "SELECT * FROM transfers WHERE id = ?",
         body.id,
       );
+      check(
+        body.mode === "stream-v1",
+        426,
+        "Refresh this page to use encrypted streaming. Existing saved files are retained.",
+      );
       if (existing) {
         check(
           existing.room === roomId &&
@@ -1095,7 +1380,7 @@ export class TransferHub {
         "This session has reached its transfer limit. Start a new desk session.",
       );
       this.sql.exec(
-        "INSERT INTO transfers(id, room, sender, recipient, name, size, state, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO transfers(id, room, sender, recipient, name, size, state, created, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         body.id,
         roomId,
         who,
@@ -1104,17 +1389,34 @@ export class TransferHub {
         body.size,
         "offered",
         Date.now(),
+        "stream-v1",
       );
       const pilot = turnPilot(this.env);
       if (pilot) {
         // Reserve conservatively for both directions/retries; never expand the free pilot silently.
         const budgetId = "turn-bytes:" + new Date().toISOString().slice(0, 7);
-        const budget = this.one("SELECT count, expires FROM limits WHERE id = ?", budgetId);
+        const budget = this.one(
+          "SELECT count, expires FROM limits WHERE id = ?",
+          budgetId,
+        );
         const used = budget?.expires > Date.now() ? budget.count : 0;
         if (used + body.size * 4 <= pilot.maxBytes) {
-          this.sql.exec("INSERT OR REPLACE INTO limits VALUES (?, ?, ?)", budgetId, used + body.size * 4,
-            Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1));
-          this.sql.exec("INSERT INTO turn_transfers VALUES (?, ?, ?)", body.id, roomId, pilot.expires);
+          this.sql.exec(
+            "INSERT OR REPLACE INTO limits VALUES (?, ?, ?)",
+            budgetId,
+            used + body.size * 4,
+            Date.UTC(
+              new Date().getUTCFullYear(),
+              new Date().getUTCMonth() + 1,
+              1,
+            ),
+          );
+          this.sql.exec(
+            "INSERT INTO turn_transfers VALUES (?, ?, ?)",
+            body.id,
+            roomId,
+            pilot.expires,
+          );
         }
       }
       this.notify(roomId, [to]);
@@ -1128,6 +1430,136 @@ export class TransferHub {
     const t = this.transfer(roomId, segments[4], who);
     const action = segments[5];
     const total = chunkCount(t.size);
+    if (
+      t.mode === "stream-v1" &&
+      action === "stream-status" &&
+      method === "GET" &&
+      segments.length === 6
+    ) {
+      check(
+        who === t.sender && t.state === "accepted",
+        403,
+        "Only the approved sender can stream.",
+      );
+      const entry = this.relay.channels.get(t.id);
+      return json({ ready: Boolean(entry), next: entry?.next ?? t.next });
+    }
+    if (
+      t.mode === "stream-v1" &&
+      action === "stream" &&
+      segments.length === 6
+    ) {
+      check(
+        t.state === "accepted",
+        409,
+        "This transfer is no longer accepted.",
+      );
+      const index = Number(request.headers.get("X-Stream-Index"));
+      check(
+        request.headers.has("X-Stream-Index") &&
+          Number.isSafeInteger(index) &&
+          index >= t.next &&
+          index < total,
+        400,
+        "Invalid stream offset.",
+      );
+      if (method === "GET") {
+        check(
+          who === t.recipient,
+          403,
+          "Only the recipient can receive this stream.",
+        );
+        this.rate("stream-open:" + t.id, 6);
+        const readable = this.relay.receive(t, index, () => {
+          check(
+            this.one("SELECT expires FROM rooms WHERE id = ?", roomId)
+              ?.expires > Date.now(),
+            410,
+            "Session ended.",
+          );
+          check(
+            this.transfer(roomId, t.id, who).state === "accepted",
+            403,
+            "Transfer revoked.",
+          );
+          if (leased)
+            check(
+              this.leases.get(roomId + ":" + who) === lease &&
+                lease.expires > Date.now(),
+              401,
+              "Employee connection expired.",
+            );
+          const deskLease = this.leases.get(roomId + ":desk");
+          check(
+            deskLease?.expires > Date.now(),
+            401,
+            "Employee connection expired.",
+          );
+        });
+        this.sql.exec(
+          "UPDATE transfers SET next = ? WHERE id = ?",
+          index,
+          t.id,
+        );
+        return new Response(readable, {
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "Cache-Control": "no-store, no-transform",
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+      }
+      check(
+        method === "POST" && who === t.sender && request.body,
+        403,
+        "Only the sender can upload this stream.",
+      );
+      this.rate("stream-upload:" + t.id, Math.ceil(total / BATCH_FRAMES) + 6);
+      const next = await this.relay.upload(t, index, request.body);
+      this.sql.exec(
+        "UPDATE transfers SET next = max(next, ?) WHERE id = ?",
+        next,
+        t.id,
+      );
+      return json({ next });
+    }
+    if (
+      t.mode === "stream-v1" &&
+      method === "POST" &&
+      action === "progress" &&
+      segments.length === 6
+    ) {
+      check(
+        who === t.recipient &&
+          t.state === "accepted" &&
+          Number.isSafeInteger(body.next) &&
+          body.next >= t.next &&
+          body.next <= total,
+        403,
+        "Invalid verified progress.",
+      );
+      this.sql.exec(
+        "UPDATE transfers SET next = ? WHERE id = ?",
+        body.next,
+        t.id,
+      );
+      return json({ next: body.next });
+    }
+    if (method === "POST" && action === "saved" && segments.length === 6) {
+      check(
+        who === t.recipient &&
+          t.state === "received" &&
+          ["download-initiated", "disk-saved"].includes(body.state),
+        403,
+        "Invalid save receipt.",
+      );
+      this.sql.exec(
+        "UPDATE transfers SET save_state = ? WHERE id = ?",
+        body.state,
+        t.id,
+      );
+      return json({ saved: true });
+    }
     if (method === "POST" && action === "accept" && segments.length === 6) {
       check(
         who === t.recipient && ["offered", "accepted"].includes(t.state),
@@ -1148,14 +1580,12 @@ export class TransferHub {
         "A received file cannot be cancelled.",
       );
       this.sql.exec(
-        "UPDATE transfers SET state = 'rejected', error = ? WHERE id = ?",
-        typeof body.reason === "string"
-          ? body.reason.slice(0, 120)
-          : "Transfer cancelled.",
+        "UPDATE transfers SET state = 'rejected', error = 'Transfer cancelled or interrupted; please resend.' WHERE id = ?",
         t.id,
       );
       this.sql.exec("DELETE FROM chunks WHERE transfer = ?", t.id);
       this.notify(roomId, [t.sender, t.recipient]);
+      this.relay.cancel(t.id);
       return json({ rejected: true });
     }
     if (action === "chunks" && segments.length === 7) {
@@ -1168,43 +1598,11 @@ export class TransferHub {
         400,
         "Invalid file chunk.",
       );
-      if (method === "PUT") {
-        check(who === t.sender, 403, "Only the sender can upload this file.");
-        check(
-          bytes.length === chunkLength(t.size, index) + 28,
-          400,
-          "The chunk has the wrong size.",
+      if (method === "PUT")
+        throw new HttpError(
+          426,
+          "Persistent uploads are disabled. Refresh and resend using streaming.",
         );
-        if (
-          index < t.next ||
-          this.one(
-            "SELECT idx FROM chunks WHERE transfer = ? AND idx = ?",
-            t.id,
-            index,
-          )
-        )
-          return json({ next: t.next });
-        check(
-          index < t.next + WINDOW_SIZE,
-          409,
-          "Wait for the receiver before sending more.",
-        );
-        check(
-          this.one("SELECT coalesce(sum(length(body)), 0) AS n FROM chunks").n +
-            bytes.length <=
-            MAX_BUFFER,
-          429,
-          "The relay is busy. Your file will resume shortly.",
-        );
-        this.sql.exec(
-          "INSERT INTO chunks VALUES (?, ?, ?)",
-          t.id,
-          index,
-          bytes.buffer,
-        );
-        this.notify(roomId, [t.recipient]);
-        return json({ stored: true }, 201);
-      }
       if (method === "GET") {
         check(
           who === t.recipient,
@@ -1271,6 +1669,20 @@ export class TransferHub {
         409,
         "This file is not complete.",
       );
+      if (t.mode === "stream-v1") {
+        check(
+          ["received", "download-initiated", "disk-saved"].includes(
+            body.saveState,
+          ),
+          400,
+          "Invalid save status.",
+        );
+        this.sql.exec(
+          "UPDATE transfers SET save_state = ? WHERE id = ?",
+          body.saveState,
+          t.id,
+        );
+      }
       this.sql.exec(
         "UPDATE transfers SET state = 'received', received = coalesce(received, ?) WHERE id = ?",
         Date.now(),

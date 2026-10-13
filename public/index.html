@@ -11,8 +11,7 @@
   <body>
     <header>
       <a class="brand" href="/"
-        >↗
-        <span>Document Exchange<small>University of Sharjah</small></span></a
+        >↗ <span>Document Exchange<small>University of Sharjah</small></span></a
       ><span class="pill" id="network">Checking connection</span>
     </header>
     <nav id="account-tools" hidden aria-label="Account">
@@ -109,7 +108,9 @@
               <h2 id="connections-heading">Active connections</h2>
               <div id="connections"></div>
               <details id="ended-connections" class="ended-connections" hidden>
-                <summary id="ended-connections-summary">Ended connections</summary>
+                <summary id="ended-connections-summary">
+                  Ended connections
+                </summary>
                 <div id="ended-connections-list"></div>
               </details>
             </section>
@@ -121,7 +122,8 @@
               </p>
               <p class="small">
                 Sessions last 8 hours. PDF, DOCX, PNG and JPG · 150 MB per file
-                · 300 MB saved on this device.
+                · Desktop Chrome/Edge supports direct disk saves; other browsers
+                receive temporary files up to 16 MB.
               </p>
             </section>
           </aside>
@@ -204,13 +206,31 @@
             autocomplete="off"
             placeholder="Enter your name or ID"
         /></label>
+        <label
+          >Email (optional)<input
+            id="student-email"
+            type="email"
+            maxlength="254"
+            autocomplete="email"
+        /></label>
+        <label
+          >Student ID (optional)<input
+            id="student-id"
+            maxlength="64"
+            autocomplete="off"
+        /></label>
         <p class="small">
           This label helps staff identify you. It does not verify your identity.
         </p>
         <button type="submit">Request connection <span>↗</span></button>
       </form>
       <div id="student-phase" role="status" aria-live="polite" hidden>
-        <span id="student-waiting-spinner" class="waiting-spinner" aria-hidden="true" hidden></span>
+        <span
+          id="student-waiting-spinner"
+          class="waiting-spinner"
+          aria-hidden="true"
+          hidden
+        ></span>
         <p id="student-identity" class="connection-identity"></p>
         <p id="student-phase-text"></p>
         <button id="student-cancel" type="button" class="secondary" hidden>

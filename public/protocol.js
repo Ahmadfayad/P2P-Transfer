@@ -24,12 +24,20 @@ const diagnosticRoutes = [
   "/api/rooms/:room/diagnostics",
   "/api/rooms/:room/wake",
   "/api/rooms/:room/ice",
+  "/api/rooms/:room/lease",
   "/api/rooms/:room/peers/:peer",
   "/api/rooms/:room/events",
   "/api/rooms/:room/transfers",
-  ...["accept", "reject", "ack", "complete"].map(
-    (action) => "/api/rooms/:room/transfers/:transfer/" + action,
-  ),
+  ...[
+    "accept",
+    "reject",
+    "ack",
+    "complete",
+    "stream",
+    "stream-status",
+    "progress",
+    "saved",
+  ].map((action) => "/api/rooms/:room/transfers/:transfer/" + action),
   "/api/rooms/:room/transfers/:transfer/chunks/:index",
   ...["sign-in/email", "sign-out", "get-session", "change-password"].map(
     (path) => "/api/auth/" + path,

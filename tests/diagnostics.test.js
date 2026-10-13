@@ -19,6 +19,13 @@ test("diagnostics redact credentials, invitation URLs and email addresses", () =
     filename: "private.pdf",
     headers: { Authorization: "sensitive" },
   });
+  record("test", {
+    message: "Sensitive student-name 123456 private.pdf student@example.com",
+    name: "Student",
+    email: "student@example.com",
+    studentId: "123456",
+    encryptionKey: "sensitive",
+  });
   assert.equal(saved.includes("sensitive"), false);
   assert.equal(saved.includes("private.pdf"), false);
   delete globalThis.sessionStorage;

@@ -8,19 +8,24 @@ export class Direct {
     this.peers = new Map();
     this.inbox = new Map();
     this.pendingIce = new Map();
+    this.streamAcks = new Map();
+    this.streamSent = new Map();
     this.configuration = configuration;
     this.starting = new Set();
     this.iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
   }
   prepare() {
     if (!this.configuration) return Promise.resolve();
-    return this.preparing ||= Promise.resolve().then(this.configuration).then((config) => {
-      if (config.enabled && Array.isArray(config.iceServers)) {
-        this.iceServers = config.iceServers;
-        this.pilot = true;
-        this.expires = config.expires;
-      }
-    }).catch(() => {});
+    return (this.preparing ||= Promise.resolve()
+      .then(this.configuration)
+      .then((config) => {
+        if (config.enabled && Array.isArray(config.iceServers)) {
+          this.iceServers = config.iceServers;
+          this.pilot = true;
+          this.expires = config.expires;
+        }
+      })
+      .catch(() => {}));
   }
   create(peer, generation) {
     const previous = this.peers.get(peer);
@@ -65,7 +70,28 @@ export class Direct {
       channel.binaryType = "arraybuffer";
       channel.onopen = channel.onclose = () => this.changed();
       channel.onmessage = (e) => {
-        if (this.peers.get(peer) !== entry || (this.allowed && !this.allowed.has(peer))) return;
+        if (
+          this.peers.get(peer) !== entry ||
+          (this.allowed && !this.allowed.has(peer))
+        )
+          return;
+        if (typeof e.data === "string" && e.data.length < 150) {
+          try {
+            const ack = JSON.parse(e.data);
+            if (
+              ack.type === "stream-ack" &&
+              this.streamAcks.has(ack.id) &&
+              Number.isSafeInteger(ack.next) &&
+              ack.next >= 0 &&
+              ack.next <= (this.streamSent.get(ack.id) || 0)
+            )
+              this.streamAcks.set(
+                ack.id,
+                Math.max(this.streamAcks.get(ack.id), ack.next),
+              );
+          } catch {}
+          return;
+        }
         if (
           !(e.data instanceof ArrayBuffer) ||
           e.data.byteLength < 44 ||
@@ -103,7 +129,8 @@ export class Direct {
     const current = this.peers.get(peer);
     if (
       current &&
-      (this.available(peer) || current.relayOnly ||
+      (this.available(peer) ||
+        current.relayOnly ||
         current.attempts >= 3 ||
         Date.now() - current.started < 60000)
     )
@@ -115,8 +142,14 @@ export class Direct {
       const generation = crypto.randomUUID();
       const entry = this.create(peer, generation);
       await entry.pc.setLocalDescription(await entry.pc.createOffer());
-      this.send(peer, { generation, type: "offer", sdp: entry.pc.localDescription.sdp }).catch(() => {});
-    } finally { this.starting.delete(peer); }
+      this.send(peer, {
+        generation,
+        type: "offer",
+        sdp: entry.pc.localDescription.sdp,
+      }).catch(() => {});
+    } finally {
+      this.starting.delete(peer);
+    }
   }
   async signal(peer, data) {
     await this.prepare();
@@ -156,7 +189,9 @@ export class Direct {
   available(peer) {
     const entry = this.peers.get(peer);
     return Boolean(
-      entry && !entry.relayOnly && (!this.pilot || this.expires > Date.now()) &&
+      entry &&
+      !entry.relayOnly &&
+      (!this.pilot || this.expires > Date.now()) &&
       entry.pc.connectionState === "connected" &&
       ["connected", "completed"].includes(entry.pc.iceConnectionState) &&
       entry.channel?.readyState === "open",
@@ -168,10 +203,7 @@ export class Direct {
   }
   upload(peer, id, index, bytes) {
     const channel = this.peers.get(peer)?.channel;
-    if (
-      !this.available(peer) ||
-      channel.bufferedAmount > 2 * 1024 * 1024
-    )
+    if (!this.available(peer) || channel.bufferedAmount > 2 * 1024 * 1024)
       return false;
     const size = 60000,
       count = Math.ceil(bytes.length / size);
@@ -227,8 +259,16 @@ export class Direct {
   }
   close() {
     this.retain(new Set());
+    this.streamAcks.clear();
+    this.streamSent.clear();
+    for (const item of this.peers.values()) item.pc.close();
     this.peers.clear();
     this.inbox.clear();
     this.pendingIce.clear();
+  }
+  ack(peer, id, next) {
+    const channel = this.peers.get(peer)?.channel;
+    if (channel?.readyState === "open")
+      channel.send(JSON.stringify({ type: "stream-ack", id, next }));
   }
 }

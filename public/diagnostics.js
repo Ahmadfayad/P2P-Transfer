@@ -29,6 +29,10 @@ const eventNames = new Set([
   "connection-retry",
   "transfer-retry",
   "send-chunk",
+  "stream-failed",
+  "stream-sent",
+  "stream-received",
+  "stream-fallback",
   "push-open",
   "push-closed",
   "webrtc-connectionstatechange",
@@ -54,6 +58,9 @@ const states = new Set([
   "have-remote-pranswer",
   "direct",
   "https",
+  "received",
+  "download-initiated",
+  "disk-saved",
   "visible",
   "hidden",
 ]);
@@ -166,7 +173,7 @@ if (typeof window !== "undefined") {
         session.server = session.server.map(diagnosticRecord);
       const report = {
         format: 2,
-        appVersion: "turn-pilot-v1",
+        appVersion: "stream-v1",
         host: location.host,
         exportedAt: new Date().toISOString(),
         network: panel.querySelector("select").value,

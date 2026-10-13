@@ -1,6 +1,6 @@
 # Document Exchange
 
-A private document handover between university staff and approved students. Employees sign in; students enter through a desk QR invitation without accounts. WebRTC provides direct transfers when available; encrypted HTTPS chunks provide recovery when direct routes are blocked. Cloudflare Workers Free hosts transfers; Neon Free stores accounts. No paid TURN provider, domain or subscription is required.
+A private document handover between university staff and approved students. Employees sign in; students enter through a desk QR invitation without accounts. WebRTC pipelines encrypted frames when available; a continuous encrypted HTTPS receive stream is available when direct routes fail. New document contents are never written to server SQLite or browser IndexedDB. Cloudflare Workers Free hosts transfers; Neon Free stores accounts. No paid TURN provider, domain or subscription is required.
 
 [Open the deployed service](https://uos-document-exchange.uos-document-exchange.workers.dev). Initial administrator credentials are supplied privately and never committed. The [original audit](docs/AUDIT.md) documents the former security and reliability problems.
 
@@ -20,25 +20,21 @@ Share passwords privately and delete your CSV copy when finished. Account creati
 
 ## Transfers and recovery
 
-Staff sign in, enter a desk name and share the generated QR code. Students open that invitation and enter their name or student ID without signing in. Staff approve each connection before files can be exchanged. Keep both pages open until **Received ✓**: the receiver has verified and saved the complete document. This does not mean the person downloaded or read it. Use **Save a copy** before clearing browser data or removing a file.
+Staff sign in, enter a desk name and share the generated QR code. Students open a details popup, enter their name/ID and optionally email, without signing in. A locked waiting screen and spinner remain until staff approve or reject them. Incoming files require **Receive & save**. Keep both pages open until verification finishes. **Received** means every frame was authenticated and the complete byte count was verified; **Download initiated** means the browser download was requested, without proof of disk save; **Saved to disk** means the File System Access writable closed successfully.
 
 Use separate devices or browser profiles for a desk and its student. Tabs retain their own role on refresh. A staff tab may visit another desk; it cannot join its own desk and mix sender/receiver storage.
 
-Verified chunks are saved in IndexedDB before acknowledgement. Interrupted transfers retry from their saved offset. Completed incoming files and original outgoing files remain locally available after the session ends. **Send again** starts a new transfer across expired sessions. A final receipt is never issued for a document that was not fully assembled and saved.
+New transfers use temporary buffers only. Desktop Chrome/Edge can write verified frames directly to a user-selected PC file, closing the writable only after complete verification and aborting unfinished writes on failure. Other browsers receive at most 16 MiB total into temporary memory and expose a download button; larger receives require desktop Chrome/Edge. Original selected files are read in slices, never copied into IndexedDB. Refreshes, disconnects or runtime eviction can lose an unfinished transfer: the interface explicitly requests a resend.
 
-A failed file retries independently with backoff and shows its error beside that file; other documents can continue. Ending a visitor connection releases an active slot and closes its direct channel when the browser next observes revoked approval. Received files and visitor history remain available.
+All existing account databases, saved original files, verified legacy chunks and earlier-file recovery remain intact. No storage reset or destructive migration is performed. Persistent upload endpoints reject new writes, while legacy saved-file reads remain available. Export receipts includes current temporary transfer metadata and older saved-file receipts.
 
-The sender fills the existing four-chunk relay window concurrently and avoids re-uploading stored chunks. The receiver drains that window without requesting room state between every chunk, saving and acknowledging each chunk in order. Optional WebRTC signaling does not delay HTTPS; a failed connection or unacknowledged direct packet switches that peer to HTTPS for the rest of that connection.
-
-The Open Relay pilot adds immediate authenticated WebSocket wake hints and acknowledgements in saved batches of up to four chunks. HTTP polling remains available. TURN is disabled until a private, expiring Free credential is configured; only approved peers can fetch it. See [the pilot setup and limits](docs/TURN-PILOT.md). Cloudflare still serves the API and recovery path during this pilot; no provider migration or paid upgrade is automatic.
-
-Files and encryption keys are separated by account in the browser. Sign-out hides them, and another person's login cannot display them. **Recover earlier files** can claim this browser's files from before sign-in into one account, retaining the original copy. Valid old room credentials can be bound to that account once. Recover only files belonging to you. Browser storage is not a backup.
+Earlier saved files and session encryption keys are separated by account in the browser. New transfer buffers belong to the current page and are discarded when it closes. Sign-out hides them, and another person's login cannot display them. **Recover earlier files** can claim this browser's files from before sign-in into one account, retaining the original copy. Valid old room credentials can be bound to that account once. Recover only files belonging to you. Browser storage is not a backup.
 
 ## Implementation
 
 Better Auth 1.7.7 stores users, hashed credentials and sessions in Neon's PostgreSQL database. Managed Neon Auth rejected six-character passwords during testing, so this deployment uses self-managed Better Auth with `minPasswordLength: 6`. Passwords are HMAC-peppered and bcrypt-hashed at cost 12 in PostgreSQL (`pgcrypto`); expensive hashing does not consume the free Worker's CPU allowance. Plaintext passwords are not stored. Login limits are atomic per email (10 attempts/minute), with a broader shared-IP limit suitable for university NAT.
 
-The QR fragment pins the desk public-key fingerprint and carries an invitation secret, never the private desk token. ECDH-derived AES-GCM keys encrypt document chunks in the browsers, binding room, participants, filename, size and chunk position. Cloudflare holds metadata and bounded encrypted chunks; it does not receive plaintext files or browser encryption keys. Compromised site JavaScript remains a threat.
+The QR fragment pins the desk public-key fingerprint and carries an invitation secret, never the private desk token. ECDH-derived AES-GCM keys encrypt document chunks in the browsers, binding room, participants, filename, size and chunk position. Cloudflare stores student name/email/ID and filenames plus necessary transfer, authorization and receipt metadata; it forwards only encrypted document bytes through bounded temporary streams. It receives no plaintext documents or browser encryption keys. Existing legacy chunk storage is preserved, but the new path does not write to it. Compromised site JavaScript remains a threat.
 
 PDF and image previews use fixed canonical MIME types. HTML and SVG are not embedded as executable documents. DOCX is download-only and checked as a ZIP container. This is not an antivirus or content scanner. The QR library is bundled locally with its MIT notices; no external script/CSS CDN is required.
 
@@ -62,9 +58,9 @@ BETTER_AUTH_SECRET=your-cryptographically-random-secret-of-at-least-32-character
 
 Run `node scripts/setup-auth.mjs` to install the additive schema and initial administrator. Set `ADMIN_EMAIL` first for another deployment. Setup generates a secret if absent and saves initial credentials outside Git in `../ADMIN-ACCESS-PRIVATE.txt`. Existing administrator passwords are left unchanged. Run `npx wrangler dev --port 8788`. Open exactly the configured origin; browser crypto needs HTTPS or localhost.
 
-Run `npm run check` and `npm test`. Real browser checks: install Chromium (`npx playwright install chromium`), start the app, then set `TEST_URL=http://127.0.0.1:8788` and run `npm run test:browser`. `CHROME_PATH` can point to installed Chrome. Tests create random accounts, remove their temporary accounts afterwards. Account tests use the private initial administrator credentials; update that local file if you change that test administrator's password.
+Run `npm run check` and `npm test`. Real browser checks: install Chromium (`npx playwright install chromium`), start the app, then set `TEST_URL=http://127.0.0.1:8788` and run `npm run test:browser`. Firefox/WebKit compatibility checks run `tests/stream-browser.mjs` with `BROWSER=firefox` or `webkit`, `COMPAT_ONLY=1`, and installed Playwright engines. `CHROME_PATH` can point to installed Chrome. Tests create random accounts, remove their temporary accounts afterwards. Tests create their own temporary admin/staff fixtures using private local database authentication; they do not need or change a real administrator password.
 
-Checks cover CSV validation, six-character login, role enforcement, password changes/resets, disabling accounts, reload, account isolation, recovery of earlier files, authenticated relay, exact file bytes, offline/refresh recovery, lost acknowledgements, direct-to-HTTPS recovery, reverse transfers and safe previews.
+Checks cover CSV validation, six-character login, role enforcement, password changes/resets, disabling accounts, reload, account isolation, recovery of earlier files, authenticated stream access, short-lived employee leases, lease revocation, exact bytes, stalled/slow receivers, refresh/resend behavior, direct-to-HTTPS fallback, bounded temporary memory and safe legacy previews. See [streaming verification](docs/STREAMING.md) for transport rationale and measured results.
 
 `npm run test:reliability` runs a separate loopback SQLite relay and real Chromium browsers without deployment secrets or real accounts. It checks that a broken first transfer does not block a healthy file, exact saved bytes survive refresh and a lost acknowledgement, and stale signaling after revocation cannot reopen a direct connection. Use `CHROME_PATH` if the installed browser differs from Playwright's bundled version.
 
@@ -76,10 +72,11 @@ Vercel Hobby can serve `public/` and proxy `/api/*` to Cloudflare through `verce
 
 ## Limits and remaining risks
 
-- PDF, DOCX, PNG and JPG; 150 MiB/file; 300 MiB reserved local files; eight-hour rooms; ten desks; twenty active/pending students per desk; two hundred visitor history records and one hundred transfers per room. Ended visitors release an active slot without deleting history. One small relay hub serves this deployment.
-- Remote buffering is bounded to 32 MiB and four chunks per transfer. Expired metadata/chunks are cleaned by an alarm. Idle polling is fifteen seconds; active polling slows when progress stops. Failed requests back off. Direct negotiation is capped at three attempts/peer/page; HTTPS remains available.
-- Free Cloudflare, Neon and Vercel quotas are shared with other projects. Exhausted quotas or provider outages can interrupt service; no paid capacity or upgrades are configured. Neon is required for authenticated API access, and a cold database can add latency.
-- Sleeping devices, closed tabs, browser eviction, cleared site data and network outages can prevent continuation. Save received documents to permanent storage.
+- PDF, DOCX, PNG and JPG; 150 MiB/file with native disk saves, 16 MiB total temporary receive memory otherwise; eight-hour rooms; ten desks; twenty students/desk; one hundred transfers/room. One small relay hub serves this deployment.
+- Four simultaneous HTTPS relay streams; upload windows contain at most eight 512 KiB encrypted frames (about 4 MiB). The relay forwards in 64 KiB writes with backpressure and a 45-second inactivity/stall deadline. WebRTC uses a four-frame credit window and a bounded inbox; slow or broken direct routes fall back to HTTPS. Failed requests back off. Direct negotiation is capped at three attempts/peer/page.
+- Metadata changes wake a bounded 20-second long poll; idle pages do not repeatedly retrieve document chunks. At most 100 metadata waiters are admitted. Staff authenticate a room-scoped 90-second memory lease and renew on approximately 30–40-second control cycles; data windows and updates validate that capability without another Neon query. App sign-out, role/password changes and account disabling revoke leases and interrupt active transfers. Identity changes made outside this app are bounded by lease expiry/renewal.
+- Free Cloudflare, Neon and Vercel quotas are shared with other projects. Exhausted quotas or provider outages can interrupt service; no paid capacity or upgrades are configured. Neon is required for employee sign-in and lease renewal; a cold database can add latency. Never increase this deployment to a paid plan automatically.
+- Sleeping devices, closed tabs, runtime eviction, network interruption and browser eviction require resending unfinished new transfers. Confirm disk saves before closing temporary-download pages. Existing earlier saved documents remain in their original browser storage.
 - If IT blocks the HTTPS address, the application cannot guarantee connectivity. Test the actual campus network. An IT-approved address is the dependable solution when domains are blocked.
 - Browser checks use desktop Chromium and a phone-sized viewport. Real campus Wi-Fi/Ethernet, real phones/Safari and simultaneous university-scale load still need a pilot.
 
@@ -89,9 +86,9 @@ Provider references: [Workers limits](https://developers.cloudflare.com/workers/
 
 - `public/app.js`, `index.html`, `style.css`: transfer interface and lifecycle.
 - `public/account.js`, `admin.html`, `admin.js`, `user-csv.js`: login and administration.
-- `public/transfer.js`, `direct.js`: persisted queue, receipts and optional direct connection.
+- `public/stream-transfer.js`, `direct.js`: temporary queue, verified streaming, disk/download receipts and optional direct pipeline. `public/transfer.js` retains the request helper and legacy saved-file assembly.
 - `public/storage.js`, `crypto.js`, `protocol.js`: account storage, encryption and validation.
-- `server/worker.js`: protected API, approval, relay, limits and expiry.
+- `server/worker.js`, `stream-relay.js`: protected API, approval, memory leases, continuous relay, backpressure, revocation, limits and expiry.
 - `server/auth.js`, `auth-schema.sql`: authentication and database schema.
 - `tests/`: security, permissions and browser recovery checks.
 
