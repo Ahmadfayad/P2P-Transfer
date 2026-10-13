@@ -43,7 +43,8 @@ try {
     )
     .waitFor();
   assert.equal(await guest.locator('input[type="url"]').count(), 0);
-  await staff.locator("#desk-location").fill("Registrar Desk 4");
+  assert.equal(await staff.locator("#desk-location").count(), 0);
+  await staff.request.post(base + "/api/desks", { data: { location: "Registrar Desk 4" } });
   const created = staff.waitForResponse(
     (r) => r.url().endsWith("/api/rooms") && r.request().method() === "POST",
   );
@@ -73,6 +74,8 @@ try {
     .waitFor();
   await staff.locator("#approval-approve").click();
   await guest.waitForFunction(() => !document.querySelector("#files").disabled);
+  assert.equal(await guest.locator("#room-name").textContent(), "Staff: Test staff");
+  assert.match(await guest.locator("#session-note").textContent(), /Your details: Fixture student · U000123/);
   await staff.getByRole("button", { name: "Extend 10 minutes" }).click();
   await staff.waitForFunction(() =>
     document.querySelector("#sending-to").textContent.includes("U000123"),

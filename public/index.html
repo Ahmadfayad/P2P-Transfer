@@ -62,8 +62,8 @@
             with a receipt you can trust.
           </p>
           <div class="features">
-            <span>✓ Encrypted files</span><span>✓ Automatic retry</span
-            ><span>✓ Approved accounts</span>
+            <span>✓ Encrypted files</span><span>✓ HTTPS fallback</span
+            ><span>✓ Staff-approved connections</span>
           </div>
         </div>
         <div class="card" id="entry">
@@ -75,18 +75,12 @@
               QR each visit.
             </p>
             <label
-              >Desk name<input
+              >Your staff name<input
                 id="desk-name"
                 readonly
                 maxlength="64"
                 placeholder="Student services"
                 autocomplete="organization" /></label
-            ><label
-              >Desk number / location<input
-                id="desk-location"
-                maxlength="64"
-                placeholder="For example: Registrar · Desk 4"
-                autocomplete="off" /></label
             ><button type="submit">Open desk <span>↗</span></button>
             <div class="printed-desk">
               <canvas id="printed-qr" aria-label="Permanent desk QR"></canvas
@@ -172,7 +166,7 @@
               <div class="section-heading">
                 <div>
                   <span class="eyebrow">Send a document</span>
-                  <h2>Pick a file. We’ll take it from here.</h2>
+                  <h2>Choose a file to send.</h2>
                 </div>
                 <span class="tag" id="route-label">Private file exchange</span>
               </div>
@@ -197,14 +191,14 @@
             <section class="card">
               <div class="section-heading">
                 <div>
-                  <span class="eyebrow">Your handovers</span>
-                  <h2>Your files</h2>
+                  <span class="eyebrow">Sent and received</span>
+                  <h2>Your documents</h2>
                 </div>
                 <button class="secondary compact" id="export">
                   Export file history
                 </button>
               </div>
-              <div id="file-list" class="file-list"></div>
+              <div id="file-list" class="file-list" tabindex="-1" aria-label="Sent and received documents"></div>
             </section>
           </div>
         </div>

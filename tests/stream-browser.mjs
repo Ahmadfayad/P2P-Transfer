@@ -161,6 +161,14 @@ async function basic(options) {
         return data;
       };
     });
+  if (!baseline) for (const page of [pair.staff, pair.guest]) await page.evaluate(() => {
+    const original = Element.prototype.scrollIntoView;
+    window.receivedScrolls = 0;
+    Element.prototype.scrollIntoView = function (...args) {
+      if (this.querySelector?.("#file-list")) window.receivedScrolls++;
+      return original.apply(this, args);
+    };
+  });
   const start = performance.now();
   await send(pair, name, bytes);
   if (options.direct) {
@@ -176,6 +184,7 @@ async function basic(options) {
         exact: true,
       })
       .waitFor({ timeout: 120000 });
+    if (!baseline) await pair.staff.waitForFunction(() => window.receivedScrolls === 1);
     const downloaded = pair.staff.waitForEvent("download");
     await pair.staff
       .getByRole("button", {
@@ -265,6 +274,7 @@ async function basic(options) {
     await pair.guest
       .getByText("Received — download to keep it", { exact: true })
       .waitFor({ timeout: 120000 });
+    await pair.guest.waitForFunction(() => window.receivedScrolls === 1);
     const back = pair.guest.waitForEvent("download");
     await pair.guest
       .getByRole("button", { name: "Download document", exact: true })

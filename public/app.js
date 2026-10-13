@@ -29,6 +29,7 @@ let exchange, session, lastState, timer, toastTimer, previewURL;
 let studentPhase = "checking",
   approval;
 const urls = new Map();
+const revealedDocuments = new Set();
 const inactivePeers = new Set(),
   reconnectedPeers = new Set();
 const peerLabel = (name) => name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -347,6 +348,13 @@ async function renderFiles() {
     current.length = 0;
   }
   renderList($("file-list"), current, true);
+  const newlyReceived = current.filter((file) => file.kind === "incoming" && file.completed && file.blob && !revealedDocuments.has(file.id));
+  if (newlyReceived.length && !$("workspace").hidden) {
+    newlyReceived.forEach((file) => revealedDocuments.add(file.id));
+    const section = $("file-list").closest("section");
+    section.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+    $("file-list").focus({ preventScroll: true });
+  }
   renderList($("saved-list"), older, false);
   $("saved-card").hidden =
     !older.length ||
@@ -385,7 +393,7 @@ function renderList(container, files, current) {
           : file.saveState === "download-initiated"
             ? "Download started"
             : received
-              ? "Received — download to keep it"
+              ? incoming ? "Received — download to keep it" : "Delivered to recipient"
               : t?.state === "offered"
                 ? "Starting transfer…"
                 : incoming
@@ -493,7 +501,7 @@ function renderState(state) {
     session.studentName ||= own?.name;
     session.expires = own?.expires || session.expires;
     $("session-note").textContent =
-      "You’re connected to " +
+      "Your details: " + (own?.name || session.studentName || "Student") + (own?.studentId ? " · " + own.studentId : "") + ". Connected to " +
       session.name +
       "’s desk" +
       (session.location ? " · " + session.location : "");
@@ -780,7 +788,7 @@ async function printDesk() {
     permanentDesk = await (
       await request("/desks", {
         method: "POST",
-        body: { location: $("desk-location").value.trim() },
+        body: {},
       })
     ).json();
     await preparePrintedQR();
@@ -891,8 +899,8 @@ async function begin(saved) {
   const desk = session.self === "desk";
   $("role-label").textContent = desk
     ? "Your receiving desk"
-    : "Your student connection";
-  $("room-name").textContent = session.name;
+    : "Connected staff member";
+  $("room-name").textContent = desk ? session.name : "Staff: " + session.name;
   $("session-note").textContent =
     (desk
       ? "Desk open · work session ends at "
@@ -940,7 +948,7 @@ $("desk-form").onsubmit = (event) => {
     permanentDesk = await (
       await request("/desks", {
         method: "POST",
-        body: { location: $("desk-location").value.trim() },
+        body: {},
       })
     ).json();
     await preparePrintedQR();
@@ -967,7 +975,7 @@ $("join-form").onsubmit = (event) => {
   submit(event.currentTarget, async () => {
     if (!invitation?.fingerprint || !invitation.invite)
       throw new Error(
-        "This invitation is incomplete. Ask the desk for a new link.",
+        "This invitation is incomplete. Scan the printed QR at the staff desk again.",
       );
     if (
       localStorage.getItem("owned-desk-room") === invitation.room ||
@@ -1022,7 +1030,7 @@ async function leaveSession(confirmEnd = true) {
   if (
     confirmEnd &&
     !confirm(
-      "End this session? Incomplete transfers will stop. Saved files remain on this device.",
+      "End this session? Unfinished transfers will stop. Download received files first; temporary files disappear when you leave.",
     )
   )
     return;
@@ -1215,7 +1223,7 @@ async function init() {
     permanentDesk = await (
       await request("/desks", { method: "POST", body: {} })
     ).json();
-    $("desk-location").value = permanentDesk.location;
+
     await preparePrintedQR();
     $("desk-name").value = user.name;
     await renderFiles();
@@ -1228,3 +1236,4 @@ async function init() {
   }
 }
 init();
+
