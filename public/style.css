@@ -1394,3 +1394,18 @@ footer {
     background: white;
   }
 }
+
+/* Separate direction from delivery state. */
+.document-group { padding: 20px; border-radius: 18px; scroll-margin-top: 24px; }
+.document-group + .document-group { margin-top: 24px; }
+.document-group h3 { margin: 0 0 8px; font-size: 1.15rem; }
+.document-group > p { margin: 0 0 16px; font-size: .88rem; }
+.incoming-group { background: #edf9f4; border: 1px solid #b8ddcd; }
+.outgoing-group { background: #f0f3ff; border: 1px solid #cdd5f1; }
+.session-clock { display: flex; gap: 16px; align-items: center; margin-top: 16px; }
+.clock-face { --clock-progress: 360deg; position: relative; flex: 0 0 108px; height: 108px; border-radius: 50%; background: conic-gradient(#50c8a9 var(--clock-progress), #c9d2e4 0); display: flex; flex-direction: column; align-items: center; justify-content: center; isolation: isolate; }
+.clock-face::before { content: ""; position: absolute; inset: 7px; background: #173e4e; border-radius: 50%; z-index: -1; }
+#session-clock-time { color: white; font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.clock-face small { color: #d8eee8; font-size: .7rem; }
+#received-notice { max-width: 430px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }

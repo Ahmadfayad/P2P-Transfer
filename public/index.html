@@ -113,7 +113,7 @@
             <span class="eyebrow" id="role-label"></span>
             <h1 id="room-name"></h1>
             <p id="session-note"></p>
-            <p id="session-countdown" role="status"></p>
+            <div class="session-clock"><div id="session-clock-face" class="clock-face"><span id="session-clock-time">—</span><small id="session-clock-label">Time left</small></div><p id="session-countdown" role="status"></p></div>
           </div>
           <button class="secondary" id="leave">Close this page</button>
         </div>
@@ -198,7 +198,7 @@
                   Export file history
                 </button>
               </div>
-              <div id="file-list" class="file-list" tabindex="-1" aria-label="Sent and received documents"></div>
+              <div id="file-list" class="file-list" tabindex="-1" aria-label="Sent and received documents"><section id="received-documents" class="document-group incoming-group" tabindex="-1"><h3>↓ Documents you received</h3><p>From the other person · preview or download here</p><div id="received-list"></div></section><section class="document-group outgoing-group"><h3>↑ Documents you sent</h3><p>Your uploads · check delivery status here</p><div id="sent-list"></div></section></div>
             </section>
           </div>
         </div>
@@ -336,6 +336,7 @@
     <footer>
       Document Exchange <span>Private by design. Free to use.</span>
     </footer>
+    <dialog id="received-notice" aria-labelledby="received-notice-title"><span class="eyebrow">New arrival</span><h2 id="received-notice-title">You have received documents</h2><p>Open the received section to preview or download them.</p><div class="actions"><button id="view-received" type="button">View documents</button><button id="dismiss-received" class="secondary" type="button">Later</button></div></dialog>
     <dialog id="preview">
       <div class="section-heading">
         <h2 id="preview-title"></h2>

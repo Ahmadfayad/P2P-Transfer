@@ -165,7 +165,7 @@ async function basic(options) {
     const original = Element.prototype.scrollIntoView;
     window.receivedScrolls = 0;
     Element.prototype.scrollIntoView = function (...args) {
-      if (this.querySelector?.("#file-list")) window.receivedScrolls++;
+      if (this.id === "received-documents") { window.receivedScrolls++; window.lastScrollBehavior = args[0]?.behavior; }
       return original.apply(this, args);
     };
   });
@@ -185,6 +185,7 @@ async function basic(options) {
       })
       .waitFor({ timeout: 120000 });
     if (!baseline) await pair.staff.waitForFunction(() => window.receivedScrolls === 1);
+    if (!baseline) assert.equal(await pair.staff.evaluate(() => window.lastScrollBehavior), "smooth");
     const downloaded = pair.staff.waitForEvent("download");
     await pair.staff
       .getByRole("button", {
@@ -301,6 +302,16 @@ async function basic(options) {
       buffer: image,
     });
     await pair.guest.locator(".file-thumbnail").waitFor({ timeout: 30000 });
+    await pair.guest.locator("#received-notice").waitFor();
+    await pair.guest.screenshot({ path: "test-results/phone-received-popup.png" });
+    assert.equal(await pair.guest.evaluate(() => window.receivedScrolls), 1);
+    await pair.guest.locator("#view-received").click();
+    await pair.guest.waitForFunction(() => window.receivedScrolls === 2);
+    assert.equal(await pair.guest.locator("#received-notice").isVisible(), false);
+    await pair.guest.screenshot({ path: "test-results/student-mobile.png", fullPage: true });
+    assert.equal(await pair.guest.locator("#received-list .file").count(), 2);
+    assert.equal(await pair.guest.locator("#sent-list .file").count(), 1);
+    assert.match(await pair.guest.locator("#session-clock-time").textContent(), /^\d+:\d{2}$/);
     assert.equal(
       await pair.guest
         .locator(".file-thumbnail")

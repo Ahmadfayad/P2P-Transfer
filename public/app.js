@@ -114,6 +114,7 @@ function showStudentPhase(phase) {
   $("student-phase").setAttribute("aria-busy", String(waiting));
   $("files").disabled = phase !== "approved";
   $("workspace").hidden = phase !== "approved";
+  if (phase !== "approved") $("received-notice").close();
   if (phase === "approved") {
     dialog.close();
     const diagnostics = dialog.querySelector(".diagnostics");
@@ -326,6 +327,13 @@ async function removeFile(file) {
   }
   await renderFiles();
 }
+function revealReceived() {
+  const target = $("received-documents");
+  target.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+  target.focus({ preventScroll: true });
+}
+$("view-received").onclick = () => { $("received-notice").close(); revealReceived(); };
+$("dismiss-received").onclick = () => $("received-notice").close();
 async function renderFiles() {
   const files = [
     ...(await db.all("files")),
@@ -347,13 +355,14 @@ async function renderFiles() {
     older.push(...current);
     current.length = 0;
   }
-  renderList($("file-list"), current, true);
+  renderList($("received-list"), current.filter((file) => file.kind === "incoming"), true);
+  renderList($("sent-list"), current.filter((file) => file.kind !== "incoming"), true);
   const newlyReceived = current.filter((file) => file.kind === "incoming" && file.completed && file.blob && !revealedDocuments.has(file.id));
   if (newlyReceived.length && !$("workspace").hidden) {
     newlyReceived.forEach((file) => revealedDocuments.add(file.id));
-    const section = $("file-list").closest("section");
-    section.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
-    $("file-list").focus({ preventScroll: true });
+    if (matchMedia("(max-width: 700px)").matches) {
+      if (!$("received-notice").open) $("received-notice").showModal();
+    } else revealReceived();
   }
   renderList($("saved-list"), older, false);
   $("saved-card").hidden =
@@ -363,7 +372,7 @@ async function renderFiles() {
 function renderList(container, files, current) {
   container.replaceChildren();
   if (!files.length) {
-    container.append(element("p", "Your documents will appear here.", "empty"));
+    container.append(element("p", container.id === "received-list" ? "No documents received yet." : container.id === "sent-list" ? "You haven’t sent any documents yet." : "Your documents will appear here.", "empty"));
     return;
   }
   for (const file of files.sort((a, b) => b.created - a.created)) {
@@ -689,17 +698,13 @@ setInterval(() => {
   if (!session || exchange?.stopped) return;
   const left = Math.ceil((session.expires - Date.now()) / 1000);
   const active = lastState?.transfers.some((t) => t.state === "accepted");
+  const remaining = Math.max(0, left);
+  $("session-clock-time").textContent = (remaining >= 3600 ? Math.floor(remaining / 3600) + ":" + String(Math.floor(remaining / 60) % 60).padStart(2, "0") : Math.floor(remaining / 60)) + ":" + String(remaining % 60).padStart(2, "0");
+  $("session-clock-label").textContent = guest ? "Connection" : "Desk session";
+  $("session-clock-face").style.setProperty("--clock-progress", Math.min(1, remaining / (guest ? 600 : 28800)) * 360 + "deg");
   $("session-countdown").textContent = guest
-    ? left > 0
-      ? "Connection time left: " +
-        Math.floor(left / 60) +
-        ":" +
-        String(left % 60).padStart(2, "0") +
-        (left <= 60 ? " · Ask staff to extend if needed." : "")
-      : active && left > -120
-        ? "Finishing your transfer · up to 2 extra minutes"
-        : "Connection ended"
-    : "Desk stays open while you work. Students connect for 10 minutes.";
+    ? left > 0 ? left <= 60 ? "Less than a minute left. Ask staff to extend if needed." : "Time left in your connection" : active && left > -120 ? "Finishing your transfer · up to 2 extra minutes" : "Connection ended"
+    : "Time left for your desk. Students connect for 10 minutes.";
   if (left > 0 || (guest && active && left > -120)) return;
   exchange.stop();
   clearTimeout(timer);
@@ -1085,6 +1090,7 @@ async function changeDesk() {
     $("workspace").hidden = true;
     await renderFiles();
   }
+  $("received-notice").close();
   invitation = null;
   printed = null;
   $("check-desk").hidden = true;

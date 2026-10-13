@@ -96,3 +96,7 @@ Next campus step: refresh the staff page, enter the physical desk location, choo
 ## Identity and receipt clarity update
 Student headers explicitly identify the staff member and show the visitor's own name/ID separately. Completed incoming documents scroll into view once on either side and move keyboard focus without repeated polling scrolls; reduced-motion preferences are respected. Staff no longer enter desk numbering/location; existing admin-managed physical desk metadata and printed QR codes remain intact. Outgoing receipt reads Delivered to recipient; incoming receipt reminds the receiver to download. Exit text distinguishes temporary files from disk downloads.
 
+
+## Document direction, clock and phone notice
+The current file section contains separate received (green) and sent (blue) groups on both sides. Desktop receipt smoothly scrolls once to the received group, with reduced-motion preference respected. Phone receipt instead opens a Documents received notice: View documents closes it and navigates only to incoming files; Later dismisses it. The circle displays the visitor's connection deadline or the employee's desk-session deadline, with a remaining-time ring. Expiry/rejection closes the phone notice so it cannot offer an unavailable connection.
+
