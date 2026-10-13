@@ -1,0 +1,44 @@
+name: Verify document transfer
+
+on:
+  push:
+    branches: [reliable-transfer]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transfer-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:reliability
+      - name: Verify Cloudflare Worker bundle without deployment
+        run: npx wrangler deploy --dry-run --outdir worker-build
+      - name: Verify native Worker notification sockets
+        run: node tests/native-sockets.mjs
+      - name: Retain verified bundle briefly for deployment
+        uses: actions/upload-artifact@v7
+        with:
+          name: verified-worker-bundle
+          path: worker-build/
+          retention-days: 1
+          if-no-files-found: error

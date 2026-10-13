@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars*
+.env*
+test-results/
+worker-build/
+playwright-report/
+.vercel/

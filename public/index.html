@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#143e38" />
+    <title>Document Exchange · UoS</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/"
+        ><img
+          class="uos-logo"
+          src="/uos-logo.png"
+          alt="University of Sharjah logo"
+        />
+        <span>Document Exchange<small>University of Sharjah</small></span></a
+      ><span class="pill" id="network">Checking connection</span>
+    </header>
+    <nav id="account-tools" hidden aria-label="Account">
+      <span id="account-name"></span
+      ><a id="admin-link" href="/admin.html" hidden>Manage users</a
+      ><button id="password-open" class="secondary compact" type="button">
+        Change password</button
+      ><button id="sign-out" class="secondary compact" type="button">
+        Sign out</button
+      ><span id="account-error" role="status"></span>
+    </nav>
+    <main>
+      <section id="login" class="card login-card" hidden>
+        <span class="eyebrow">Document Exchange</span>
+        <h1>Sign in</h1>
+        <p>Use the account provided by your administrator.</p>
+        <form id="login-form" method="post">
+          <label
+            >Email<input
+              name="email"
+              type="email"
+              required
+              autocomplete="username"
+              maxlength="254" /></label
+          ><label
+            >Password<input
+              name="password"
+              type="password"
+              required
+              minlength="6"
+              maxlength="128"
+              autocomplete="current-password" /></label
+          ><button type="submit" disabled>Sign in</button>
+          <p id="login-error" role="alert"></p>
+        </form>
+      </section>
+      <section id="welcome" class="welcome" hidden>
+        <div>
+          <span class="eyebrow">A simpler handover</span>
+          <h1>Your documents.<br />A clear destination.</h1>
+          <p class="intro">
+            Send a document to the desk, or receive one back. Private transfers
+            without creating a student account.
+          </p>
+          <div class="features">
+            <span>✓ Encrypted files</span><span>✓ HTTPS fallback</span
+            ><span>✓ Staff-approved connections</span>
+          </div>
+        </div>
+        <div class="card" id="entry">
+          <form id="desk-form">
+            <span class="eyebrow">For staff</span>
+            <h2>Open your desk</h2>
+            <p>
+              Open your desk when you’re ready. Students scan the same printed
+              QR each visit.
+            </p>
+            <label
+              >Your staff name<input
+                id="desk-name"
+                readonly
+                maxlength="64"
+                placeholder="Student services"
+                autocomplete="organization" /></label
+            ><button type="submit">Open desk <span>↗</span></button>
+            <div class="printed-desk">
+              <canvas id="printed-qr" aria-label="Permanent desk QR"></canvas
+              ><button id="print-desk" class="secondary" type="button">
+                Print desk QR
+              </button>
+              <p class="small">
+                Print once and place at your desk. This QR stays the same when
+                you reopen.
+              </p>
+            </div>
+            <p class="small">
+              Students: scan the desk’s QR code or open the link they share.
+            </p>
+          </form>
+          <div id="student-start" hidden tabindex="-1">
+            <h2>Scan the QR at your desk</h2>
+            <p>
+              Use your phone’s camera to scan the printed QR at the staff desk
+              you’re seated with. No link or account is needed.
+            </p>
+            <p id="desk-unavailable" role="status"></p>
+            <button id="check-desk" hidden>Check desk again</button>
+          </div>
+        </div>
+      </section>
+      <section id="workspace" hidden>
+        <div class="page-heading">
+          <div>
+            <span class="eyebrow" id="role-label"></span>
+            <h1 id="room-name"></h1>
+            <p id="session-note"></p>
+            <div class="session-clock">
+              <div id="session-clock-face" class="clock-face">
+                <span id="session-clock-time">—</span
+                ><small id="session-clock-label">Time left</small>
+              </div>
+              <p id="session-countdown" role="status"></p>
+            </div>
+          </div>
+          <button class="secondary" id="leave">Close this page</button>
+        </div>
+        <div class="layout">
+          <aside>
+            <section class="card" id="invite-card" hidden>
+              <h2>Invite a student</h2>
+              <p>
+                Students scan your permanent printed QR. Check their name and
+                student ID, then approve once.
+              </p>
+              <canvas id="qr" aria-label="Desk invitation QR code"></canvas
+              ><button class="secondary" id="copy-link">
+                Copy invitation link
+              </button>
+              <button id="print-desk-active" class="secondary">
+                Print desk QR
+              </button>
+              <p class="small">
+                Keep the printed QR at this desk. Students still need your
+                approval.
+              </p>
+            </section>
+            <section class="card" id="connections-card">
+              <h2 id="connections-heading">Active connections</h2>
+              <div id="connections"></div>
+              <details id="ended-connections" class="ended-connections" hidden>
+                <summary id="ended-connections-summary">
+                  Ended connections
+                </summary>
+                <div id="ended-connections-list"></div>
+              </details>
+            </section>
+            <section class="card quiet">
+              <h2>Before you leave</h2>
+              <p>
+                Keep both pages open until “Received” appears. Download received
+                files to keep them. Temporary files disappear when this page
+                closes or refreshes.
+              </p>
+              <p class="small">
+                PDF, DOCX, PNG and JPG · 150 MB per file · 300 MB of temporary
+                received files per page.
+              </p>
+            </section>
+          </aside>
+          <div class="content">
+            <section class="card">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Send a document</span>
+                  <h2>Choose a file to send.</h2>
+                </div>
+                <span class="tag" id="route-label">Private file exchange</span>
+              </div>
+              <p id="sending-to" class="recipient-context"></p>
+              <label id="recipient-label" hidden
+                >Send to<select id="recipient">
+                  <option value="">Choose an approved student</option>
+                </select></label
+              ><label class="drop" id="drop"
+                ><span class="upload-icon">↑</span
+                ><strong>Choose files or drop them here</strong
+                ><span>PDF, DOCX, PNG or JPG</span
+                ><input
+                  id="files"
+                  type="file"
+                  multiple
+                  accept=".pdf,.docx,.png,.jpg,.jpeg"
+                  aria-label="Choose documents to send"
+              /></label>
+              <p id="send-note" class="small"></p>
+            </section>
+            <section class="card">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">File exchange</span>
+                  <h2>Documents</h2>
+                </div>
+                <button class="secondary compact" id="export">
+                  Export file history
+                </button>
+              </div>
+              <div
+                class="document-tabs"
+                role="tablist"
+                aria-label="Document direction"
+              >
+                <button
+                  id="incoming-tab"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="received-documents"
+                >
+                  Staff → You</button
+                ><button
+                  id="outgoing-tab"
+                  tabindex="-1"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="sent-documents"
+                >
+                  You → Staff
+                </button>
+              </div>
+              <div id="file-list" class="file-list">
+                <section
+                  id="received-documents"
+                  class="document-group incoming-group"
+                  role="tabpanel"
+                  aria-labelledby="incoming-tab"
+                  tabindex="-1"
+                >
+                  <h3 id="received-group-title">From your staff member</h3>
+                  <div id="received-list"></div>
+                </section>
+                <section
+                  id="sent-documents"
+                  class="document-group outgoing-group"
+                  role="tabpanel"
+                  aria-labelledby="outgoing-tab"
+                  hidden
+                >
+                  <h3 id="sent-group-title">Your uploads</h3>
+                  <div id="sent-list"></div>
+                </section>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+      <section class="card" id="saved-card" hidden>
+        <h2>Saved on this device</h2>
+        <p>These files remain available even after a desk session ends.</p>
+        <div id="saved-list"></div>
+      </section>
+      <section class="card" id="legacy-recovery" hidden>
+        <h2>Earlier saved files</h2>
+        <p>
+          This browser has files from before account sign-in was added. Recover
+          them into your account only if they belong to you. The original
+          browser copy is retained.
+        </p>
+        <button id="recover-legacy" type="button" class="secondary">
+          Recover earlier files
+        </button>
+      </section>
+      <div id="message" role="status" aria-live="polite" hidden></div>
+    </main>
+    <dialog
+      id="student-gate"
+      class="connection-dialog"
+      aria-labelledby="student-gate-title"
+    >
+      <span class="eyebrow">Student document portal</span>
+      <h2 id="student-gate-title">Connect to the desk</h2>
+      <p id="desk-identity" class="connection-identity"></p>
+      <form id="join-form" hidden>
+        <p>Your desk will approve you before any files are sent.</p>
+        <label
+          >Student name<input
+            id="student-name"
+            autofocus
+            required
+            maxlength="64"
+            autocomplete="off"
+            placeholder="Your full name"
+        /></label>
+        <input id="student-email" type="hidden" value="" />
+        <label
+          >Student ID<input
+            id="student-id"
+            required
+            maxlength="64"
+            autocomplete="off"
+        /></label>
+        <p class="small">Staff will check these details with you.</p>
+        <button type="submit">Request connection <span>↗</span></button>
+      </form>
+      <div id="student-phase" role="status" aria-live="polite" hidden>
+        <span
+          id="student-waiting-spinner"
+          class="waiting-spinner"
+          aria-hidden="true"
+          hidden
+        ></span>
+        <p id="student-identity" class="connection-identity"></p>
+        <p id="student-phase-text"></p>
+        <button id="student-cancel" type="button" class="secondary" hidden>
+          Cancel request
+        </button>
+        <button id="student-saved" type="button" class="secondary" hidden>
+          View received files
+        </button>
+      </div>
+      <p id="student-error" role="alert"></p>
+      <button id="change-desk" type="button" class="secondary">
+        At a different desk? Change desk
+      </button>
+    </dialog>
+    <dialog
+      id="approval-dialog"
+      class="connection-dialog"
+      aria-labelledby="approval-title"
+    >
+      <span class="eyebrow">New student request</span>
+      <h2 id="approval-title">A student wants to connect</h2>
+      <p>Student name and ID</p>
+      <p id="approval-identity" class="connection-identity"></p>
+      <p id="approval-returning" class="connection-badge" hidden></p>
+      <p class="small">
+        This information is self-reported. Check it with the person at your desk
+        before approving.
+      </p>
+      <p id="approval-count" class="small"></p>
+      <div class="actions">
+        <button id="approval-approve" type="button">Approve</button>
+        <button id="approval-reject" type="button" class="secondary">
+          Reject
+        </button>
+      </div>
+      <p id="approval-error" role="alert"></p>
+    </dialog>
+    <dialog id="password-dialog">
+      <h2>Change password</h2>
+      <form id="password-form">
+        <label
+          >Current password<input
+            name="currentPassword"
+            type="password"
+            autocomplete="current-password"
+            required
+            maxlength="128" /></label
+        ><label
+          >New password<input
+            name="newPassword"
+            type="password"
+            autocomplete="new-password"
+            required
+            minlength="6"
+            maxlength="128" /></label
+        ><button type="submit">Save password</button
+        ><button id="password-close" type="button" class="secondary">
+          Close
+        </button>
+        <p id="password-error" role="status"></p>
+      </form>
+    </dialog>
+    <section class="print-sheet">
+      <img class="uos-logo" src="/uos-logo.png" alt="University of Sharjah" />
+      <h1>Send and receive documents</h1>
+      <h2 id="print-name"></h2>
+      <p id="print-location"></p>
+      <canvas id="print-qr"></canvas>
+      <p>
+        Scan with your phone’s camera. Enter your name and student ID.<br />Staff
+        will approve your connection.
+      </p>
+    </section>
+    <footer>Document Exchange <span>University of Sharjah</span></footer>
+    <dialog id="received-notice" aria-labelledby="received-notice-title">
+      <span class="eyebrow">↓ Ready for you</span>
+      <h2 id="received-notice-title">Documents have arrived</h2>
+      <p id="received-notice-text">Ready to preview or download.</p>
+      <p id="received-notice-file" class="notice-file"></p>
+      <div class="actions">
+        <button id="view-received" type="button">View documents</button
+        ><button id="dismiss-received" class="secondary" type="button">
+          Not now
+        </button>
+      </div>
+    </dialog>
+    <dialog id="preview">
+      <div class="section-heading">
+        <h2 id="preview-title"></h2>
+        <button id="close-preview" class="secondary">Close preview</button>
+      </div>
+      <div id="preview-content"></div>
+    </dialog>
+  </body>
+</html>

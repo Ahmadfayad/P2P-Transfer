@@ -1,0 +1,21 @@
+{
+  "name": "uos-document-exchange",
+  "account_id": "78856dd27887e361c07175196655d39e",
+  "main": "server/worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "BETTER_AUTH_URL": "https://uos-document-exchange.uos-document-exchange.workers.dev",
+    "FRONTEND_ORIGINS": "https://uos-document-exchange.vercel.app,https://uos-document-exchange-ahmadfayads-projects.vercel.app,https://uos-document-exchange-kaw2cnssh-ahmadfayads-projects.vercel.app,https://uos-document-exchange-bmht22dr4-ahmadfayads-projects.vercel.app,https://uos-document-exchange-git-reliable-8f1b8e-ahmadfayads-projects.vercel.app,https://uos-file-transfer.vercel.app,https://uos-file-transfer-ahmadfayads-projects.vercel.app,https://uos-file-transfer-hq2dp4479-ahmadfayads-projects.vercel.app,https://uos-file-transfer-pydtd0amb-ahmadfayads-projects.vercel.app,https://uos-file-transfer-git-reliable-transfer-ahmadfayads-projects.vercel.app",
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/student"],
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "TransferHub" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TransferHub"] }],
+  "observability": { "enabled": false },
+}
