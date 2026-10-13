@@ -10,6 +10,17 @@ const hub = new TransferHub(
   {
     storage: {
       setAlarm: async () => {},
+      transactionSync: (fn) => {
+        database.exec("BEGIN");
+        try {
+          const value = fn();
+          database.exec("COMMIT");
+          return value;
+        } catch (error) {
+          database.exec("ROLLBACK");
+          throw error;
+        }
+      },
       sql: {
         exec(query, ...args) {
           if (!args.length && query.includes(";")) {
@@ -94,7 +105,9 @@ const server = createServer(async (req, res) => {
         "X-Access-Mode",
       ])
         headers.delete(key);
-      if (headers.get("X-Guest-Access") === "1")
+      if (req.method === "GET" && /^\/api\/desks\/[0-9a-f-]{36}$/.test(req.url))
+        headers.set("X-Access-Mode", "guest");
+      else if (headers.get("X-Guest-Access") === "1")
         headers.set("X-Access-Mode", "guest");
       else if (headers.has("X-Stream-Lease") && !req.url.endsWith("/lease"))
         headers.set("X-Access-Mode", "lease");

@@ -82,6 +82,17 @@ function service() {
   const ctx = {
     storage: {
       setAlarm: async () => {},
+      transactionSync: (fn) => {
+        database.exec("BEGIN");
+        try {
+          const value = fn();
+          database.exec("COMMIT");
+          return value;
+        } catch (error) {
+          database.exec("ROLLBACK");
+          throw error;
+        }
+      },
       sql: {
         exec(query, ...args) {
           if (!args.length && query.includes(";")) {
@@ -103,7 +114,7 @@ function service() {
   };
 }
 
-test("desk name comes from the authenticated profile and expires after ten minutes", async (t) => {
+test("desk name comes from the authenticated profile and stays open for the work session", async (t) => {
   const { hub } = service();
   const now = Date.now();
   t.mock.method(Date, "now", () => now);
@@ -124,8 +135,8 @@ test("desk name comes from the authenticated profile and expires after ten minut
     )
   ).json();
   assert.equal(room.name, "Ahmad Albalbissi");
-  assert.equal(room.expires, now + 600000);
-  t.mock.method(Date, "now", () => now + 600001);
+  assert.equal(room.expires, now + 8 * 3600000);
+  t.mock.method(Date, "now", () => now + 8 * 3600000 + 1);
   const ended = await hub.fetch(
     new Request("https://test/api/rooms/" + room.id + "/state", {
       headers: {
@@ -905,4 +916,283 @@ test("visitors can withdraw only their own request; stale approval cannot revive
   } finally {
     database.close();
   }
+});
+
+test("printed desk QR stays fixed across openings, validates ownership and can be replaced", async () => {
+  const { hub } = service();
+  const headers = {
+    "X-Account-ID": "owner",
+    "X-Account-Role": "staff",
+    "X-Account-Name": "Ahmad%20Albalbissi",
+  };
+  const call = (path, method = "GET", body, extra = {}) =>
+    hub.fetch(
+      new Request("https://test" + path, {
+        method,
+        headers: { ...headers, ...extra },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
+  const desk = await (
+    await call("/api/desks", "POST", { location: "Registrar Desk 4" })
+  ).json();
+  const again = await (await call("/api/desks", "POST", {})).json();
+  assert.equal(desk.id, again.id);
+  assert.equal(desk.code, again.code);
+  const lookup = () =>
+    call("/api/desks/" + desk.id, "GET", null, { "X-Desk-Code": desk.code });
+  assert.equal((await (await lookup()).json()).available, false);
+  assert.equal((await call("/api/desks/" + desk.id)).status, 404);
+  const open = async () => {
+    const result = await (
+      await call("/api/rooms", "POST", {
+        deskId: desk.id,
+        publicKey: (await identity()).publicKey,
+      })
+    ).json();
+    await call(
+      "/api/rooms/" + result.id + "/lease",
+      "POST",
+      {},
+      { Authorization: "Bearer " + result.token },
+    );
+    return result;
+  };
+  const first = await open();
+  const visible = await (await lookup()).json();
+  assert.equal(visible.available, true);
+  assert.equal(visible.name, "Ahmad Albalbissi");
+  assert.equal(visible.invite, desk.code);
+  assert.equal(visible.token, undefined);
+  const second = await open();
+  assert.notEqual(first.id, second.id);
+  assert.equal((await (await lookup()).json()).room, second.id);
+  assert.equal(
+    (
+      await call(
+        "/api/rooms",
+        "POST",
+        { deskId: desk.id, publicKey: (await identity()).publicKey },
+        { "X-Account-ID": "other" },
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await call("/api/admin/desks/" + desk.id, "POST", { rotate: true }))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(
+        "/api/admin/desks/" + desk.id,
+        "POST",
+        { rotate: true },
+        { "X-Account-Role": "admin" },
+      )
+    ).status,
+    200,
+  );
+  assert.equal((await lookup()).status, 404);
+  const replaced = await (await call("/api/desks", "POST", {})).json();
+  assert.notEqual(replaced.code, desk.code);
+  const otherDesk = await (
+    await call(
+      "/api/desks",
+      "POST",
+      {},
+      { "X-Account-ID": "new-staff", "X-Account-Name": "New%20staff" },
+    )
+  ).json();
+  assert.equal(
+    (
+      await call(
+        "/api/admin/desks/" + desk.id,
+        "POST",
+        { account: "new-staff", name: "New staff" },
+        { "X-Account-Role": "admin" },
+      )
+    ).status,
+    200,
+  );
+  const reassigned = await (
+    await call("/api/desks/" + desk.id, "GET", null, {
+      "X-Desk-Code": replaced.code,
+    })
+  ).json();
+  assert.equal(reassigned.name, "New staff");
+  assert.equal(reassigned.available, false);
+  const assignments = (
+    await (
+      await call("/api/admin/desks", "GET", null, { "X-Account-Role": "admin" })
+    ).json()
+  ).desks;
+  assert.equal(assignments.find((d) => d.id === otherDesk.id).account, "owner");
+  assert.equal(
+    assignments.find((d) => d.id === otherDesk.id).code,
+    otherDesk.code,
+  );
+  const next = await (
+    await call(
+      "/api/rooms",
+      "POST",
+      { deskId: desk.id, publicKey: (await identity()).publicKey },
+      { "X-Account-ID": "new-staff", "X-Account-Name": "New%20staff" },
+    )
+  ).json();
+  await hub.fetch(
+    new Request("https://internal/revoke-account", {
+      method: "POST",
+      body: JSON.stringify({ account: "new-staff" }),
+    }),
+  );
+  assert.equal(
+    (
+      await (
+        await call("/api/desks/" + desk.id, "GET", null, {
+          "X-Desk-Code": replaced.code,
+        })
+      ).json()
+    ).available,
+    false,
+  );
+});
+
+test("student expiry is independent; only an active transfer gets bounded grace and staff can extend", async (t) => {
+  const { hub } = service();
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const staff = { "X-Account-ID": "owner", "X-Account-Role": "staff" };
+  const key = (await identity()).publicKey;
+  const room = await (
+    await hub.fetch(
+      new Request("https://test/api/rooms", {
+        method: "POST",
+        headers: staff,
+        body: JSON.stringify({ name: "Desk", publicKey: key }),
+      }),
+    )
+  ).json();
+  const call = (
+    suffix,
+    method = "GET",
+    body,
+    actor = staff,
+    credential = room.token,
+  ) =>
+    hub.fetch(
+      new Request("https://test/api/rooms/" + room.id + suffix, {
+        method,
+        headers: { ...actor, Authorization: "Bearer " + credential },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
+  const join = async (name) =>
+    (
+      await hub.fetch(
+        new Request("https://test/api/rooms/" + room.id + "/join", {
+          method: "POST",
+          headers: { "X-Access-Mode": "guest", "X-Invite": room.invite },
+          body: JSON.stringify({ name, studentId: "U012345", publicKey: key }),
+        }),
+      )
+    ).json();
+  const peer = await join("Student"),
+    idle = await join("Idle");
+  assert.equal(peer.expires, now + 600000);
+  await call("/peers/" + peer.id, "POST", { state: "approved" });
+  const id = crypto.randomUUID();
+  await call(
+    "/transfers",
+    "POST",
+    { id, to: "desk", name: "file.pdf", size: 8, mode: "stream-v1" },
+    { "X-Access-Mode": "guest" },
+    peer.token,
+  );
+  await call("/transfers/" + id + "/accept", "POST", {});
+  t.mock.method(Date, "now", () => now + 600001);
+  assert.equal(
+    (
+      await call(
+        "/state",
+        "GET",
+        null,
+        { "X-Access-Mode": "guest" },
+        idle.token,
+      )
+    ).status,
+    410,
+  );
+  assert.equal(
+    (
+      await call(
+        "/state",
+        "GET",
+        null,
+        { "X-Access-Mode": "guest" },
+        peer.token,
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await call(
+        "/transfers",
+        "POST",
+        {
+          id: crypto.randomUUID(),
+          to: "desk",
+          name: "new.pdf",
+          size: 8,
+          mode: "stream-v1",
+        },
+        { "X-Access-Mode": "guest" },
+        peer.token,
+      )
+    ).status,
+    410,
+  );
+  assert.equal(
+    (
+      await call(
+        "/extend/" + peer.id,
+        "POST",
+        {},
+        { "X-Access-Mode": "guest" },
+        peer.token,
+      )
+    ).status,
+    403,
+  );
+  assert.equal((await call("/extend/" + peer.id, "POST", {})).status, 200);
+  assert.equal(
+    (
+      await (
+        await call(
+          "/state",
+          "GET",
+          null,
+          { "X-Access-Mode": "guest" },
+          peer.token,
+        )
+      ).json()
+    ).peers[0].expires,
+    now + 1200001,
+  );
+  t.mock.method(Date, "now", () => now + 1320002);
+  assert.equal(
+    (
+      await call(
+        "/state",
+        "GET",
+        null,
+        { "X-Access-Mode": "guest" },
+        peer.token,
+      )
+    ).status,
+    410,
+  );
+  assert.equal((await call("/state")).status, 200);
 });

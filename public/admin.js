@@ -292,7 +292,77 @@ try {
   else {
     $("administration").hidden = false;
     await listUsers();
+    $("desk-administration").hidden = false;
+    await listDesks();
   }
 } catch (e) {
   $("admin-error").textContent = e.message;
 }
+
+async function listDesks() {
+  const { desks } = await accountRequest("admin/desks");
+  $("admin-desks").replaceChildren();
+  for (const desk of desks) {
+    const form = document.createElement("form");
+    form.className = "desk-admin-row";
+    form.dataset.deskId = desk.id;
+    const title = document.createElement("h3");
+    title.textContent = desk.name;
+    const locationLabel = document.createElement("label");
+    locationLabel.textContent = "Desk number / location";
+    const location = document.createElement("input");
+    location.value = desk.location;
+    location.maxLength = 64;
+    locationLabel.append(location);
+    const emailLabel = document.createElement("label");
+    emailLabel.textContent =
+      "Reassign to employee email (leave empty to keep current staff)";
+    const email = document.createElement("input");
+    email.type = "email";
+    email.maxLength = 254;
+    emailLabel.append(email);
+    const save = document.createElement("button");
+    save.textContent = "Save desk";
+    const rotate = document.createElement("button");
+    rotate.type = "button";
+    rotate.className = "secondary";
+    rotate.textContent = "Replace printed QR";
+    form.append(title, locationLabel, emailLabel, save, rotate);
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      try {
+        await accountRequest("admin/desks/" + desk.id, {
+          location: location.value.trim(),
+          email: email.value.trim(),
+        });
+        notify("Desk updated. Staff should refresh before opening it.");
+        await listDesks();
+      } catch (error) {
+        $("desk-admin-error").textContent = error.message;
+      } finally {
+        save.disabled = false;
+      }
+    };
+    rotate.onclick = async () => {
+      if (
+        !confirm(
+          "Replace this QR? The printed old QR and active desk connection will stop working. Print a new QR afterwards.",
+        )
+      )
+        return;
+      try {
+        await accountRequest("admin/desks/" + desk.id, { rotate: true });
+        notify("QR replaced. Staff must refresh and print the new QR.");
+        await listDesks();
+      } catch (error) {
+        $("desk-admin-error").textContent = error.message;
+      }
+    };
+    $("admin-desks").append(form);
+  }
+}
+$("refresh-desks").onclick = () =>
+  listDesks().catch((error) => {
+    $("desk-admin-error").textContent = error.message;
+  });

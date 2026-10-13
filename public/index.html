@@ -70,7 +70,10 @@
           <form id="desk-form">
             <span class="eyebrow">For staff</span>
             <h2>Open your desk</h2>
-            <p>Create a private session and share its QR code with students.</p>
+            <p>
+              Open your desk when you’re ready. Students scan the same printed
+              QR each visit.
+            </p>
             <label
               >Desk name<input
                 id="desk-name"
@@ -78,28 +81,35 @@
                 maxlength="64"
                 placeholder="Student services"
                 autocomplete="organization" /></label
+            ><label
+              >Desk number / location<input
+                id="desk-location"
+                maxlength="64"
+                placeholder="For example: Registrar · Desk 4"
+                autocomplete="off" /></label
             ><button type="submit">Open desk <span>↗</span></button>
+            <div class="printed-desk">
+              <canvas id="printed-qr" aria-label="Permanent desk QR"></canvas
+              ><button id="print-desk" class="secondary" type="button">
+                Print desk QR
+              </button>
+              <p class="small">
+                Print once and place at your desk. This QR stays the same when
+                you reopen.
+              </p>
+            </div>
             <p class="small">
               Students: scan the desk’s QR code or open the link they share.
             </p>
           </form>
-          <div id="student-start" hidden>
-            <h2>Find your desk</h2>
+          <div id="student-start" hidden tabindex="-1">
+            <h2>Scan the QR at your desk</h2>
             <p>
-              Scan the QR code shown by the staff member you’re seated with, or
-              paste their invitation link below.
+              Use your phone’s camera to scan the printed QR at the staff desk
+              you’re seated with. No link or account is needed.
             </p>
-            <form id="desk-link-form">
-              <label
-                >Desk invitation link<input
-                  id="desk-link"
-                  type="url"
-                  required
-                  placeholder="Paste the link from your staff desk"
-                  autocomplete="off"
-              /></label>
-              <button type="submit">Connect to this desk →</button>
-            </form>
+            <p id="desk-unavailable" role="status"></p>
+            <button id="check-desk" hidden>Check desk again</button>
           </div>
         </div>
       </section>
@@ -109,6 +119,7 @@
             <span class="eyebrow" id="role-label"></span>
             <h1 id="room-name"></h1>
             <p id="session-note"></p>
+            <p id="session-countdown" role="status"></p>
           </div>
           <button class="secondary" id="leave">Close this page</button>
         </div>
@@ -116,12 +127,21 @@
           <aside>
             <section class="card" id="invite-card" hidden>
               <h2>Invite a student</h2>
-              <p>Ask them to scan this code. Approve their name below.</p>
+              <p>
+                Students scan your permanent printed QR. Check their name and
+                student ID, then approve once.
+              </p>
               <canvas id="qr" aria-label="Desk invitation QR code"></canvas
               ><button class="secondary" id="copy-link">
                 Copy invitation link
               </button>
-              <p class="small">Only share with people you want to join.</p>
+              <button id="print-desk-active" class="secondary">
+                Print desk QR
+              </button>
+              <p class="small">
+                Keep the printed QR at this desk. Students still need your
+                approval.
+              </p>
             </section>
             <section class="card">
               <h2 id="connections-heading">Active connections</h2>
@@ -136,13 +156,14 @@
             <section class="card quiet">
               <h2>Keep the handover safe</h2>
               <p>
-                Keep both pages open until “Received” appears. Files stay on
-                this browser until you remove them.
+                Keep both pages open until “Received” appears. Download received
+                files to keep them. Temporary files disappear when this page
+                closes or refreshes.
               </p>
               <p class="small">
-                Sessions last 10 minutes. PDF, DOCX, PNG and JPG · 150 MB per
-                file · 300 MB of temporary received files per page. Download
-                files before closing or refreshing.
+                Student connections last 10 minutes. PDF, DOCX, PNG and JPG ·
+                150 MB per file · 300 MB of temporary received files per page.
+                Download files before closing or refreshing.
               </p>
             </section>
           </aside>
@@ -153,10 +174,9 @@
                   <span class="eyebrow">Send a document</span>
                   <h2>Pick a file. We’ll take it from here.</h2>
                 </div>
-                <span class="tag" id="route-label"
-                  >Encrypted HTTPS available</span
-                >
+                <span class="tag" id="route-label">Private file exchange</span>
               </div>
+              <p id="sending-to" class="recipient-context"></p>
               <label id="recipient-label" hidden
                 >Send to<select id="recipient">
                   <option value="">Choose an approved student</option>
@@ -181,7 +201,7 @@
                   <h2>Your files</h2>
                 </div>
                 <button class="secondary compact" id="export">
-                  Export receipts
+                  Export file history
                 </button>
               </div>
               <div id="file-list" class="file-list"></div>
@@ -214,27 +234,23 @@
     >
       <span class="eyebrow">Student document portal</span>
       <h2 id="student-gate-title">Connect to the desk</h2>
+      <p id="desk-identity" class="connection-identity"></p>
       <form id="join-form" hidden>
         <p>Your desk will approve you before any files are sent.</p>
         <label
-          >Your name or student ID<input
+          >Student name<input
             id="student-name"
             autofocus
             required
             maxlength="64"
             autocomplete="off"
-            placeholder="Enter your name or ID"
+            placeholder="Your full name"
         /></label>
+        <input id="student-email" type="hidden" value="" />
         <label
-          >Email (optional)<input
-            id="student-email"
-            type="email"
-            maxlength="254"
-            autocomplete="email"
-        /></label>
-        <label
-          >Student ID (optional)<input
+          >Student ID<input
             id="student-id"
+            required
             maxlength="64"
             autocomplete="off"
         /></label>
@@ -271,7 +287,7 @@
     >
       <span class="eyebrow">New student request</span>
       <h2 id="approval-title">A student wants to connect</h2>
-      <p>Name or student ID</p>
+      <p>Student name and ID</p>
       <p id="approval-identity" class="connection-identity"></p>
       <p id="approval-returning" class="connection-badge" hidden></p>
       <p class="small">
@@ -312,6 +328,17 @@
         <p id="password-error" role="status"></p>
       </form>
     </dialog>
+    <section class="print-sheet">
+      <img class="uos-logo" src="/uos-logo.png" alt="University of Sharjah" />
+      <h1>Send and receive documents</h1>
+      <h2 id="print-name"></h2>
+      <p id="print-location"></p>
+      <canvas id="print-qr"></canvas>
+      <p>
+        Scan with your phone’s camera. Enter your name and student ID.<br />Staff
+        will approve your connection.
+      </p>
+    </section>
     <footer>
       Document Exchange <span>Private by design. Free to use.</span>
     </footer>

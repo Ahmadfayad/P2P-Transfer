@@ -44,6 +44,34 @@ for (const [key, role] of [
   credentials[key] = { email, password };
 }
 export async function cleanupAuthFixtures(additionalIds = []) {
+  const base = process.env.TEST_URL || "http://127.0.0.1:8788";
+  const signed = await fetch(base + "/api/auth/sign-in/email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testHeaders(base) },
+    body: JSON.stringify(credentials.admin),
+  });
+  const cookie = signed.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  if (signed.ok && cookie) {
+    const headers = { Cookie: cookie, ...testHeaders(base) };
+    const response = await fetch(base + "/api/admin/desks", { headers });
+    if (response.ok) {
+      const owned = new Set([...fixtureUsers, ...additionalIds]);
+      for (const desk of (await response.json()).desks.filter((d) =>
+        owned.has(d.account),
+      )) {
+        const removed = await fetch(base + "/api/admin/desks/" + desk.id, {
+          method: "DELETE",
+          headers,
+        });
+        if (!removed.ok)
+          throw new Error("Fixture desk cleanup failed: " + removed.status);
+      }
+    }
+  }
+
   for (const id of [...fixtureUsers, ...additionalIds]) {
     await context.internalAdapter.deleteUser(id);
   }

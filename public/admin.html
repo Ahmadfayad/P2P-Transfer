@@ -303,5 +303,18 @@
         <p id="password-error" role="status"></p>
       </form>
     </dialog>
+    <section class="card" id="desk-administration" hidden>
+      <span class="eyebrow">Printed invitations</span>
+      <h2>Manage physical desks</h2>
+      <p>
+        Reassign a desk or update its location while keeping the printed QR. If
+        the employee already has a desk, their desk assignments are swapped and
+        both active connections close. Replace the QR if copied or misused; the
+        old printout stops working.
+      </p>
+      <button id="refresh-desks" class="secondary">Refresh desks</button>
+      <div id="admin-desks"></div>
+      <p id="desk-admin-error" role="alert"></p>
+    </section>
   </body>
 </html>

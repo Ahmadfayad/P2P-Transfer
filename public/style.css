@@ -1321,3 +1321,76 @@ footer {
     line-height: 1.6;
   }
 }
+
+.print-sheet {
+  display: none;
+}
+.printed-desk {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid #dfe8e5;
+  text-align: center;
+}
+.printed-desk canvas {
+  display: block;
+  margin: 12px auto;
+}
+.recipient-context {
+  padding: 12px;
+  border-radius: 12px;
+  background: #eaf6f0;
+  color: #195d48;
+  font-weight: 600;
+}
+.desk-admin-row {
+  padding: 20px;
+  border-top: 1px solid #dde5eb;
+  display: grid;
+  gap: 12px;
+}
+#desk-administration {
+  max-width: 1168px;
+  margin: 20px auto;
+}
+@media print {
+  body > * {
+    display: none !important;
+  }
+  body > .print-sheet {
+    display: block !important;
+    text-align: center;
+    padding: 40px;
+  }
+  .print-sheet canvas {
+    width: 95mm;
+    height: 95mm;
+  }
+  .print-sheet .uos-logo {
+    width: 110mm;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .brand span,
+  .student-page .content {
+    min-width: 0;
+  }
+  .file .status {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+@media print {
+  body {
+    background: white !important;
+    color: black;
+  }
+  .print-sheet {
+    background: white;
+  }
+}

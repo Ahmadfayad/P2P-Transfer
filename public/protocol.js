@@ -16,6 +16,11 @@ export const uuid = (value) =>
   );
 const diagnosticRoutes = [
   "/api/health",
+  "/api/desks",
+  "/api/desks/:desk",
+  "/api/admin/desks",
+  "/api/admin/desks/:desk",
+  "/api/rooms/:room/extend/:peer",
   "/api/rooms",
   "/api/rooms/:room/join",
   "/api/rooms/:room/leave",
@@ -50,10 +55,14 @@ export function diagnosticRoute(value) {
   const path = String(value || "").split(/[?#]/)[0];
   if (diagnosticRoutes.includes(path)) return path;
   const parts = path.split("/");
+  if (/^\/api\/desks\/[0-9a-f-]{36}$/.test(path)) return "/api/desks/:desk";
+  if (/^\/api\/admin\/desks\/[0-9a-f-]{36}$/.test(path))
+    return "/api/admin/desks/:desk";
   if (parts[1] !== "api" || parts[2] !== "rooms" || !uuid(parts[3]))
     return "[unknown-route]";
   parts[3] = ":room";
-  if (parts[4] === "peers" && uuid(parts[5])) parts[5] = ":peer";
+  if (["peers", "extend"].includes(parts[4]) && uuid(parts[5]))
+    parts[5] = ":peer";
   if (parts[4] === "transfers" && uuid(parts[5])) {
     parts[5] = ":transfer";
     if (parts[6] === "chunks" && /^\d{1,3}$/.test(parts[7]))

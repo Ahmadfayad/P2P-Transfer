@@ -32,7 +32,7 @@ async function openDesk(page, name) {
   };
   rooms.push(saved.owner);
   saved.owner.request = page.request;
-  return saved.invite;
+  return { desk: saved.invite.desk, code: saved.invite.code };
 }
 try {
   const first = await browser.newContext(),
@@ -44,6 +44,7 @@ try {
   const guest = await first.newPage();
   await guest.goto(base + "/#" + new URLSearchParams(other));
   await guest.locator("#student-name").fill("Guest");
+  await guest.locator("#student-id").fill("U001234");
   await guest.getByRole("button", { name: "Request connection" }).click();
   await guest
     .getByRole("heading", { name: "Waiting for staff approval" })
@@ -53,13 +54,14 @@ try {
   await desk.reload();
   await desk.getByRole("button", { name: "Open desk" }).waitFor();
   await guest.reload();
-  await guest.locator("#desk-link").waitFor();
+  await guest.locator("#student-start").waitFor();
   console.log(
     "PASS refresh preserves employee login but does not restore desk or guest sessions",
   );
   const ownGuest = await first.newPage();
   await ownGuest.goto(base + "/#" + new URLSearchParams(own));
   await ownGuest.locator("#student-name").fill("Own guest");
+  await ownGuest.locator("#student-id").fill("U001234");
   await ownGuest.getByRole("button", { name: "Request connection" }).click();
   await ownGuest
     .locator("#student-error")

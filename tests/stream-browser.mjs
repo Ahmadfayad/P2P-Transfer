@@ -68,7 +68,13 @@ async function setup({ direct = false, clock = false } = {}) {
     (r) => r.url().endsWith("/api/rooms") && r.request().method() === "POST",
   );
   await staff.getByRole("button", { name: "Open desk" }).click();
-  const room = await (await created).json();
+  const roomResponse = await created;
+  assert.equal(
+    roomResponse.status(),
+    201,
+    "Desk creation must succeed before showing its QR",
+  );
+  const room = await roomResponse.json();
   await staff
     .getByRole("button", { name: "Copy invitation link", exact: true })
     .waitFor();
@@ -81,12 +87,18 @@ async function setup({ direct = false, clock = false } = {}) {
     .getByRole("button", { name: "Copy invitation link", exact: true })
     .click();
   const link = await staff.evaluate(() => window.testLink);
+  const printed = Object.fromEntries(
+    new URLSearchParams(new URL(link).hash.slice(1)),
+  );
   const invitation = {
-    ...Object.fromEntries(new URLSearchParams(new URL(link).hash.slice(1))),
+    room: room.id,
     token: room.token,
+    invite: room.invite,
+    desk: printed.desk,
+    code: printed.code,
   };
   assert.equal(
-    room.expires > Date.now() && room.expires <= Date.now() + 600000,
+    room.expires > Date.now() && room.expires <= Date.now() + 8 * 3600000,
     true,
   );
   assert.equal(await staff.locator("#desk-name").inputValue(), room.name);
@@ -94,21 +106,11 @@ async function setup({ direct = false, clock = false } = {}) {
     id: invitation.room,
     token: invitation.token,
     request: staff.request,
+    desk: invitation.desk,
   });
-  await guest.goto(
-    base +
-      "/#" +
-      new URLSearchParams({
-        room: invitation.room,
-        invite: invitation.invite,
-        key: invitation.key,
-      }),
-  );
+  await guest.goto(link);
   await guest.locator("#student-name").fill("Sensitive test student");
   if (!baseline) {
-    await guest
-      .locator("#student-email")
-      .fill("sensitive-person@example.invalid");
     await guest.locator("#student-id").fill("sensitive-id-987");
   }
   await guest.getByRole("button", { name: "Request connection" }).click();
@@ -170,7 +172,7 @@ async function basic(options) {
   let digest;
   {
     await pair.staff
-      .getByText(baseline ? "Received ✓" : "Received ✓ · download ready", {
+      .getByText(baseline ? "Received ✓" : "Received — download to keep it", {
         exact: true,
       })
       .waitFor({ timeout: 120000 });
@@ -185,7 +187,7 @@ async function basic(options) {
     digest = createHash("sha256").update(actual).digest("hex");
     if (!baseline)
       await pair.staff
-        .getByText("Download initiated · disk save unconfirmed", {
+        .getByText("Download started", {
           exact: true,
         })
         .waitFor();
@@ -254,14 +256,14 @@ async function basic(options) {
     );
     await pair.staff
       .locator("#recipient")
-      .selectOption({ label: "Sensitive test student" });
+      .selectOption({ label: "Sensitive test student · sensitive-id-987" });
     await pair.staff.locator("#files").setInputFiles({
       name: "return.pdf",
       mimeType: "application/pdf",
       buffer: bytes,
     });
     await pair.guest
-      .getByText("Received ✓ · download ready", { exact: true })
+      .getByText("Received — download to keep it", { exact: true })
       .waitFor({ timeout: 120000 });
     const back = pair.guest.waitForEvent("download");
     await pair.guest
@@ -283,13 +285,11 @@ async function basic(options) {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6VwkAAAAASUVORK5CYII=",
       "base64",
     );
-    await pair.staff
-      .locator("#files")
-      .setInputFiles({
-        name: "preview.png",
-        mimeType: "image/png",
-        buffer: image,
-      });
+    await pair.staff.locator("#files").setInputFiles({
+      name: "preview.png",
+      mimeType: "image/png",
+      buffer: image,
+    });
     await pair.guest.locator(".file-thumbnail").waitFor({ timeout: 30000 });
     assert.equal(
       await pair.guest
@@ -309,16 +309,17 @@ async function basic(options) {
       path: "test-results/staff-auto-receive.png",
       fullPage: true,
     });
+    pair.guest.once("dialog", (dialog) => dialog.accept());
     await pair.guest
       .getByRole("button", { name: "Change desk", exact: true })
       .click();
-    await pair.guest.locator("#desk-link").waitFor();
+    await pair.guest.locator("#student-start").waitFor();
     await pair.staff
       .getByText("Ended connections (1)", { exact: true })
       .waitFor({ timeout: 30000 });
     assert.equal(await pair.staff.locator(".presence.red").count(), 1);
     await pair.guest.reload();
-    await pair.guest.locator("#desk-link").waitFor();
+    await pair.guest.locator("#student-start").waitFor();
     console.log(
       "PASS automatic reception in both directions, mobile layout, presence, desk switching and no session restoration",
     );
@@ -350,7 +351,7 @@ try {
     await pair.staff.reload();
     await pair.staff.getByRole("button", { name: "Open desk" }).waitFor();
     await pair.guest
-      .getByText("Interrupted — resend needed", { exact: true })
+      .getByText("Interrupted — send again", { exact: true })
       .waitFor({ timeout: 60000 });
     assert.equal(
       await pair.staff.evaluate(async () => {
@@ -372,7 +373,7 @@ try {
       .getByRole("button", { name: "End connection", exact: true })
       .click();
     await revoked.staff
-      .getByText("Interrupted — resend needed", { exact: true })
+      .getByText("Interrupted — send again", { exact: true })
       .waitFor({ timeout: 30000 });
     console.log("PASS staff revocation interrupts automatic reception");
     const disabled = await setup();
@@ -396,7 +397,7 @@ try {
         200,
       );
       await disabled.staff
-        .getByText("Interrupted — resend needed", { exact: true })
+        .getByText("Interrupted — send again", { exact: true })
         .waitFor({ timeout: 30000 });
       assert.equal(
         (
@@ -414,22 +415,31 @@ try {
         "PASS account revocation cancels automatic reception and leases",
       );
     } finally {
-      await adminPage.request.post(base + "/api/admin/status", {
-        data: { userId: employee.id, disabled: false },
-      });
+      assert.equal(
+        (
+          await adminPage.request.post(base + "/api/admin/status", {
+            data: { userId: employee.id, disabled: false },
+          })
+        ).status(),
+        200,
+      );
     }
   }
   if (!baseline && process.env.COMPAT_ONLY !== "1") {
     const expiring = await setup({ clock: true });
     await expiring.staff.clock.fastForward(600001);
     await expiring.guest.clock.fastForward(600001);
-    await expiring.staff.getByText("Session ended", { exact: true }).waitFor();
+    await expiring.staff
+      .getByRole("button", { name: "End desk session" })
+      .waitFor();
     await expiring.guest
       .getByRole("heading", { name: "This session has ended" })
       .waitFor();
-    assert.equal(await expiring.staff.locator("#files").isEnabled(), false);
+    assert.equal(await expiring.staff.locator("#files").isEnabled(), true);
     assert.equal(await expiring.guest.locator("#files").isEnabled(), false);
-    console.log("PASS both browser sessions close at the ten-minute deadline");
+    console.log(
+      "PASS student expires independently while the staff desk stays open",
+    );
   }
   assert.deepEqual(errors, []);
   await mkdir("test-results", { recursive: true });

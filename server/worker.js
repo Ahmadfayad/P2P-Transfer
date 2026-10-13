@@ -15,7 +15,9 @@ import { parseUsersCSV } from "../public/user-csv.js";
 import { turnPilot } from "./turn.js";
 import { StreamRelay, BATCH_FRAMES } from "./stream-relay.js";
 
-const SESSION_MS = 10 * 60 * 1000;
+const SESSION_MS = 8 * 60 * 60 * 1000;
+const VISITOR_MS = 10 * 60 * 1000,
+  GRACE_MS = 2 * 60 * 1000;
 const MAX_BUFFER = 32 * 1024 * 1024;
 const encoder = new TextEncoder();
 const token = () =>
@@ -131,10 +133,12 @@ export default {
       else {
         try {
           if (
-            (request.headers.get("X-Guest-Access") === "1" ||
+            (request.method === "GET" &&
+              /^\/api\/desks\/[0-9a-f-]{36}$/.test(url.pathname)) ||
+            ((request.headers.get("X-Guest-Access") === "1" ||
               (request.headers.has("X-Stream-Lease") &&
                 !url.pathname.endsWith("/lease"))) &&
-            /^\/api\/rooms\/[0-9a-f-]{36}\//.test(url.pathname)
+              /^\/api\/rooms\/[0-9a-f-]{36}\//.test(url.pathname))
           ) {
             const headers = new Headers(request.headers);
             for (const name of [
@@ -234,6 +238,62 @@ export default {
                 response = await env.HUB.get(
                   env.HUB.idFromName("exchange"),
                 ).fetch(new Request("https://internal/system-log"));
+              } else if (url.pathname.startsWith("/api/admin/desks")) {
+                check(
+                  account.user.role === "admin",
+                  403,
+                  "Administrator access required.",
+                );
+                let forwarded = request;
+                if (request.method === "POST") {
+                  const body = await request.json();
+                  check(
+                    body && typeof body === "object" && !Array.isArray(body),
+                    400,
+                    "Invalid desk update.",
+                  );
+                  check(
+                    body.email === undefined || typeof body.email === "string",
+                    400,
+                    "Enter an employee email.",
+                  );
+                  check(
+                    body.rotate === undefined ||
+                      typeof body.rotate === "boolean",
+                    400,
+                    "Invalid QR replacement request.",
+                  );
+                  delete body.account;
+                  delete body.name;
+                  if (body.email) {
+                    const context = await auth.$context;
+                    const target =
+                      await context.internalAdapter.findUserByEmail(
+                        body.email.trim().toLowerCase(),
+                      );
+                    check(
+                      target?.user &&
+                        !target.user.banned &&
+                        permittedRole(target.user.role),
+                      400,
+                      "Choose an existing active employee email.",
+                    );
+                    body.account = target.user.id;
+                    body.name = target.user.name;
+                  }
+                  forwarded = new Request(request.url, {
+                    method: "POST",
+                    headers: request.headers,
+                    body: JSON.stringify(body),
+                  });
+                }
+                const headers = new Headers(forwarded.headers);
+                headers.delete("X-Access-Mode");
+                headers.set("X-Account-ID", account.user.id);
+                headers.set("X-Account-Role", "admin");
+                response = await env.HUB.get(
+                  env.HUB.idFromName("exchange"),
+                ).fetch(new Request(forwarded, { headers }));
               } else if (url.pathname.startsWith("/api/admin/")) {
                 const mutation =
                   request.method === "POST" ? request.clone() : null;
@@ -301,7 +361,7 @@ export default {
       );
     const headers = new Headers(response.headers);
     headers.set("X-Request-ID", requestId);
-    headers.set("X-App-Version", "auto-receive-v1");
+    headers.set("X-App-Version", "printed-desks-v1");
     if (
       url.pathname.startsWith("/api/") &&
       response.status >= 400 &&
@@ -457,6 +517,7 @@ export class TransferHub {
     this.env = env;
     this.sql = ctx.storage.sql;
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS desks (id TEXT PRIMARY KEY, account TEXT UNIQUE NOT NULL, name TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', code TEXT NOT NULL, room TEXT);
       CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT NOT NULL, invite TEXT NOT NULL, public_key TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS peers (room TEXT NOT NULL, id TEXT PRIMARY KEY, token TEXT NOT NULL, name TEXT NOT NULL, public_key TEXT NOT NULL, state TEXT NOT NULL, seen INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS transfers (id TEXT PRIMARY KEY, room TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, state TEXT NOT NULL, next INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, received INTEGER, error TEXT);
@@ -482,6 +543,7 @@ export class TransferHub {
       ["transfers", "save_state", "TEXT DEFAULT ''"],
       ["peers", "email", "TEXT DEFAULT ''"],
       ["peers", "student_id", "TEXT DEFAULT ''"],
+      ["peers", "expires", "INTEGER DEFAULT 0"],
     ]) {
       if (
         !this.rows("PRAGMA table_info(" + table + ")").some(
@@ -610,8 +672,26 @@ export class TransferHub {
   approved(room, peer) {
     return (
       peer === "desk" ||
-      this.one("SELECT state FROM peers WHERE room = ? AND id = ?", room, peer)
-        ?.state === "approved"
+      (this.one("SELECT state FROM peers WHERE room = ? AND id = ?", room, peer)
+        ?.state === "approved" &&
+        this.visitorActive(
+          room,
+          this.one("SELECT * FROM peers WHERE room = ? AND id = ?", room, peer),
+        ))
+    );
+  }
+  visitorActive(room, peer) {
+    if (!peer?.expires || peer.expires > Date.now()) return true;
+    return (
+      Date.now() < peer.expires + GRACE_MS &&
+      Boolean(
+        this.one(
+          "SELECT id FROM transfers WHERE room = ? AND state = 'accepted' AND (sender = ? OR recipient = ?)",
+          room,
+          peer.id,
+          peer.id,
+        ),
+      )
     );
   }
   transfer(room, id, who) {
@@ -769,6 +849,10 @@ export class TransferHub {
           "UPDATE transfers SET state = 'rejected', error = 'Employee access revoked; resend after reconnecting.' WHERE room = ? AND state NOT IN ('received', 'rejected')",
           room.room,
         );
+        this.sql.exec(
+          "UPDATE rooms SET expires = 0 WHERE id = ? AND id IN (SELECT room FROM desks)",
+          room.room,
+        );
         this.wake(room.room);
       }
       for (const [key, lease] of this.leases)
@@ -787,6 +871,175 @@ export class TransferHub {
       );
       this.rate("login:" + (await hash(body.email)), 10, 60000);
       this.sql.exec("DELETE FROM limits WHERE expires <= ?", Date.now());
+      return json({ ok: true });
+    }
+    if (url.pathname === "/api/desks" && method === "POST") {
+      const account = request.headers.get("X-Account-ID");
+      check(
+        account &&
+          ["staff", "admin"].includes(request.headers.get("X-Account-Role")),
+        403,
+        "Employee access required.",
+      );
+      const name = decodeURIComponent(
+        request.headers.get("X-Account-Name") || "Staff desk",
+      );
+      let desk = this.one("SELECT * FROM desks WHERE account = ?", account);
+      if (!desk) {
+        desk = {
+          id: crypto.randomUUID(),
+          account,
+          name,
+          location: "",
+          code: token(),
+          room: null,
+        };
+        this.sql.exec(
+          "INSERT INTO desks VALUES (?, ?, ?, ?, ?, ?)",
+          desk.id,
+          account,
+          name,
+          "",
+          desk.code,
+          null,
+        );
+      }
+      check(
+        body.location === undefined ||
+          body.location === "" ||
+          label(body.location),
+        400,
+        "Enter a short desk number or location.",
+      );
+      this.sql.exec(
+        "UPDATE desks SET name = ?, location = ? WHERE id = ?",
+        name,
+        body.location ?? desk.location,
+        desk.id,
+      );
+      return json({ ...desk, name, location: body.location ?? desk.location });
+    }
+    if (
+      method === "GET" &&
+      /^\/api\/desks\/[0-9a-f-]{36}$/.test(url.pathname)
+    ) {
+      this.rate(
+        "desk-lookup:" +
+          (await hash(request.headers.get("CF-Connecting-IP") || "local")),
+        120,
+        60000,
+      );
+      const desk = this.one("SELECT * FROM desks WHERE id = ?", segments[2]);
+      check(
+        desk && request.headers.get("X-Desk-Code") === desk.code,
+        404,
+        "This printed QR has been replaced. Ask staff for the current QR.",
+      );
+      const room =
+        desk.room && this.one("SELECT * FROM rooms WHERE id = ?", desk.room);
+      const available =
+        room &&
+        room.expires > Date.now() &&
+        this.leases.get(room.id + ":desk")?.expires > Date.now();
+      // No private owner credential is exposed by a printed invitation.
+      return json({
+        name: desk.name,
+        location: desk.location,
+        available: Boolean(available),
+        ...(available
+          ? {
+              room: room.id,
+              invite: desk.code,
+              publicKey: JSON.parse(room.public_key),
+              expires: room.expires,
+            }
+          : {}),
+      });
+    }
+    if (url.pathname.startsWith("/api/admin/desks")) {
+      check(
+        request.headers.get("X-Account-Role") === "admin",
+        403,
+        "Administrator access required.",
+      );
+      if (method === "GET" && segments.length === 3)
+        return json({ desks: this.rows("SELECT * FROM desks ORDER BY name") });
+      if (method === "DELETE" && segments.length === 4 && uuid(segments[3])) {
+        const desk = this.one("SELECT * FROM desks WHERE id = ?", segments[3]);
+        check(desk, 404, "Desk not found.");
+        const room =
+          desk.room &&
+          this.one("SELECT expires FROM rooms WHERE id = ?", desk.room);
+        check(
+          !room || room.expires <= Date.now(),
+          409,
+          "Close the desk before removing its printed invitation.",
+        );
+        this.sql.exec("DELETE FROM desks WHERE id = ?", desk.id);
+        return json({ removed: true });
+      }
+      check(method === "POST" && uuid(segments[3]), 404, "Desk not found.");
+      const desk = this.one("SELECT * FROM desks WHERE id = ?", segments[3]);
+      check(desk, 404, "Desk not found.");
+      check(
+        body.location === undefined ||
+          body.location === "" ||
+          label(body.location),
+        400,
+        "Enter a short desk location.",
+      );
+      check(
+        !body.email || (body.account && label(body.name)),
+        400,
+        "Choose an existing employee.",
+      );
+      const other =
+        body.account && body.account !== desk.account
+          ? this.one(
+              "SELECT * FROM desks WHERE account = ? AND id != ?",
+              body.account,
+              desk.id,
+            )
+          : null;
+      if (other?.room) {
+        this.relay.cancelWhere((t) => t.room === other.room);
+        this.sql.exec("UPDATE rooms SET expires = 0 WHERE id = ?", other.room);
+        this.leases.delete(other.room + ":desk");
+        this.wake(other.room);
+      }
+      if (body.rotate || (body.account && body.account !== desk.account)) {
+        if (desk.room) {
+          this.relay.cancelWhere((t) => t.room === desk.room);
+          this.sql.exec("UPDATE rooms SET expires = 0 WHERE id = ?", desk.room);
+          this.leases.delete(desk.room + ":desk");
+          this.wake(desk.room);
+        }
+        desk.room = null;
+      }
+      this.ctx.storage.transactionSync(() => {
+        if (other)
+          this.sql.exec(
+            "UPDATE desks SET account = ? WHERE id = ?",
+            "reassigning:" + desk.id,
+            other.id,
+          );
+        this.sql.exec(
+          "UPDATE desks SET account = ?, name = ?, location = ?, code = ?, room = ? WHERE id = ?",
+          body.account || desk.account,
+          body.name || desk.name,
+          body.location ?? desk.location,
+          body.rotate ? token() : desk.code,
+          desk.room,
+          desk.id,
+        );
+        if (other)
+          this.sql.exec(
+            "UPDATE desks SET account = ?, name = ?, room = NULL WHERE id = ?",
+            desk.account,
+            desk.name,
+            other.id,
+          );
+      });
       return json({ ok: true });
     }
     if (method === "POST" && url.pathname === "/api/rooms") {
@@ -826,9 +1079,27 @@ export class TransferHub {
         400,
         "Enter a valid student ID.",
       );
+      const permanent =
+        body.deskId &&
+        this.one("SELECT * FROM desks WHERE id = ?", body.deskId);
+      if (body.deskId)
+        check(
+          permanent?.account === request.headers.get("X-Account-ID"),
+          403,
+          "This physical desk belongs to another employee.",
+        );
+      if (permanent?.room) {
+        this.relay.cancelWhere((t) => t.room === permanent.room);
+        this.sql.exec(
+          "UPDATE rooms SET expires = 0 WHERE id = ?",
+          permanent.room,
+        );
+        this.wake(permanent.room);
+        this.cleanup();
+      }
       const id = crypto.randomUUID(),
         owner = token(),
-        invite = token(),
+        invite = permanent ? permanent.code : token(),
         expires = Date.now() + SESSION_MS;
       const ownerHash = await hash(owner),
         inviteSecretHash = await hash(invite);
@@ -853,6 +1124,17 @@ export class TransferHub {
         "desk",
         request.headers.get("X-Account-ID"),
       );
+      if (permanent)
+        this.sql.exec(
+          "UPDATE desks SET room = ? WHERE id = ?",
+          id,
+          permanent.id,
+        );
+      this.leases.set(id + ":desk", {
+        token: token(),
+        account: request.headers.get("X-Account-ID"),
+        expires: Date.now() + 90000,
+      });
       return json(
         { id, name: body.name.trim(), token: owner, invite, expires },
         201,
@@ -913,6 +1195,8 @@ export class TransferHub {
         400,
         "Enter a valid student ID.",
       );
+      if (this.one("SELECT id FROM desks WHERE room = ?", roomId))
+        check(label(body.studentId), 400, "Enter your student ID.");
       await validatePublicKey(body.publicKey);
       const id = crypto.randomUUID(),
         secret = token(),
@@ -956,6 +1240,11 @@ export class TransferHub {
           : "",
       );
       this.sql.exec(
+        "UPDATE peers SET expires = ? WHERE id = ?",
+        Math.min(room.expires, Date.now() + VISITOR_MS),
+        id,
+      );
+      this.sql.exec(
         "INSERT INTO account_bindings VALUES (?, ?, ?)",
         roomId,
         id,
@@ -969,7 +1258,7 @@ export class TransferHub {
           id,
           token: secret,
           publicKey: JSON.parse(room.public_key),
-          expires: room.expires,
+          expires: Math.min(room.expires, Date.now() + VISITOR_MS),
           name: room.name,
         },
         201,
@@ -989,6 +1278,11 @@ export class TransferHub {
         "Your connection key is no longer valid. Please reopen the desk link.",
       );
       who = peer.id;
+      check(
+        this.visitorActive(roomId, peer),
+        410,
+        "Your ten-minute connection ended. Scan the printed QR to reconnect.",
+      );
     }
     const lease = this.leases.get(roomId + ":" + who);
     const leased =
@@ -1150,15 +1444,25 @@ export class TransferHub {
           Date.now(),
           who,
         );
+      for (const visitor of this.rows(
+        "SELECT * FROM peers WHERE room = ? AND state != 'declined'",
+        roomId,
+      ))
+        if (!this.visitorActive(roomId, visitor))
+          this.declinePeer(
+            roomId,
+            visitor.id,
+            "Connection expired; scan the printed QR to reconnect.",
+          );
       const peers =
         who === "desk"
           ? this.rows(
-              "SELECT id, name, public_key, state, seen, email, student_id FROM peers WHERE room = ?",
+              "SELECT id, name, public_key, state, seen, email, student_id, expires FROM peers WHERE room = ?",
               roomId,
             )
           : [
               this.one(
-                "SELECT id, name, public_key, state, seen FROM peers WHERE id = ?",
+                "SELECT id, name, public_key, state, seen, student_id, expires FROM peers WHERE id = ?",
                 who,
               ),
             ];
@@ -1209,6 +1513,7 @@ export class TransferHub {
           seen: p.seen,
           email: p.email || "",
           studentId: p.student_id || "",
+          expires: p.expires || room.expires,
         })),
         transfers: transfers.map((t) => ({
           ...t,
@@ -1235,6 +1540,30 @@ export class TransferHub {
       this.cleanup();
       this.notify(roomId);
       return json({ ended: true });
+    }
+    if (
+      method === "POST" &&
+      segments[3] === "extend" &&
+      segments.length === 5
+    ) {
+      check(who === "desk", 403, "Only staff can extend a student connection.");
+      const target = this.one(
+        "SELECT * FROM peers WHERE room = ? AND id = ?",
+        roomId,
+        segments[4],
+      );
+      check(
+        target?.state === "approved" && this.visitorActive(roomId, target),
+        409,
+        "This student must scan again.",
+      );
+      this.sql.exec(
+        "UPDATE peers SET expires = ? WHERE id = ?",
+        Math.min(room.expires, Date.now() + VISITOR_MS),
+        target.id,
+      );
+      this.notify(roomId, ["desk", target.id]);
+      return json({ extended: true });
     }
     if (method === "POST" && segments[3] === "peers" && segments.length === 5) {
       check(who === "desk", 403, "Only the desk can approve a connection.");
@@ -1360,6 +1689,19 @@ export class TransferHub {
       const existing = this.one(
         "SELECT * FROM transfers WHERE id = ?",
         body.id,
+      );
+      const visitor =
+        who === "desk"
+          ? this.one(
+              "SELECT * FROM peers WHERE room = ? AND id = ?",
+              roomId,
+              body.to,
+            )
+          : peer;
+      check(
+        !visitor?.expires || visitor.expires > Date.now(),
+        410,
+        "Connection is finishing its last transfer. Scan again before sending another file.",
       );
       check(
         body.mode === "stream-v1",

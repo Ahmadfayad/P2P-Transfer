@@ -163,7 +163,7 @@ if (typeof window !== "undefined") {
   const panel = document.createElement("details");
   panel.className = "diagnostics card";
   panel.innerHTML =
-    '<summary>Connection help & system log</summary><p>Download and share this log if a connection stalls. Passwords, invitation keys and document contents are excluded.</p><label>Current network<select><option>Unknown</option><option>University Wi-Fi</option><option>University Ethernet</option><option>Mobile data</option><option>Home network</option></select></label><button type="button" class="secondary">Download system log</button><p role="status"></p>';
+    '<summary>Having trouble?</summary><p>Download and share this log if a connection stalls. Passwords, invitation keys and document contents are excluded.</p><label>Current network<select><option>Unknown</option><option>University Wi-Fi</option><option>University Ethernet</option><option>Mobile data</option><option>Home network</option></select></label><button type="button" class="secondary">Download system log</button><p role="status"></p>';
   document.querySelector("main")?.append(panel);
   panel.querySelector("button").onclick = async () => {
     try {
@@ -173,7 +173,7 @@ if (typeof window !== "undefined") {
         session.server = session.server.map(diagnosticRecord);
       const report = {
         format: 2,
-        appVersion: "auto-receive-v1",
+        appVersion: "printed-desks-v1",
         host: location.host,
         exportedAt: new Date().toISOString(),
         network: panel.querySelector("select").value,
