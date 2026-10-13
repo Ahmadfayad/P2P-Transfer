@@ -2,7 +2,7 @@
 
 A private document handover between university staff and approved students. Employees sign in; students enter through a desk QR invitation without accounts. WebRTC pipelines encrypted frames when available; a continuous encrypted HTTPS receive stream is available when direct routes fail. New document contents are never written to server SQLite or browser IndexedDB. Cloudflare Workers Free hosts transfers; Neon Free stores accounts. No paid TURN provider, domain or subscription is required.
 
-[Open the deployed service](https://uos-document-exchange.uos-document-exchange.workers.dev). Initial administrator credentials are supplied privately and never committed. The [original audit](docs/AUDIT.md) documents the former security and reliability problems.
+[Open the deployed service](https://uos-file-transfer.vercel.app). Initial administrator credentials are supplied privately and never committed. The [original audit](docs/AUDIT.md) documents the former security and reliability problems.
 
 ## Accounts and administration
 

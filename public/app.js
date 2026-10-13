@@ -878,7 +878,7 @@ $("check-desk").onclick = () =>
 async function preparePrintedQR() {
   const origin = ["localhost", "127.0.0.1"].includes(location.hostname)
     ? location.origin
-    : "https://uos-document-exchange.uos-document-exchange.workers.dev";
+    : "https://uos-file-transfer.vercel.app";
   const link = new URL("/student", origin);
   link.hash = new URLSearchParams({
     desk: permanentDesk.id,

@@ -6,12 +6,11 @@ The permanent printed-desk update supersedes the earlier ten-minute whole-room b
 
 This is the P2P-Transfer repository. The working branch is `reliable-transfer` and the review is https://github.com/Ahmadfayad/P2P-Transfer/pull/2.
 
-The live Cloudflare service runs independently of the personal PC:
-https://uos-document-exchange.uos-document-exchange.workers.dev
+The primary public website is https://uos-file-transfer.vercel.app, using the existing uos-file-transfer project. Cloudflare continues handling transfers and remains independently available at https://uos-document-exchange.uos-document-exchange.workers.dev. Both operate independently of the personal PC.
 
 The existing Vercel project is **uos-file-transfer**. Its review preview is:
 https://uos-file-transfer-git-reliable-transfer-ahmadfayads-projects.vercel.app
-The production Vercel site is still the original main branch until promotion is requested.
+Vercel production promotion was explicitly authorized on 13 October 2026. New permanent QR printouts use the short Vercel address; existing Cloudflare QR codes retain the same desk ID/code and remain valid. Main is not merged.
 
 ## Work PC
 
