@@ -59,3 +59,11 @@ Unit/security checks cover frame integrity and altered AAD, private-token/lease 
 Browser checks cover exact received bytes, temporary memory downloads, direct-to-HTTPS fallback, slow disk writes, refreshed pages requesting resend, rejected files, staff rejection aborting writes, disabled employee access, no new file/chunk IndexedDB records, diagnostic redaction, existing saved-file recovery/isolation, administration, six-character login, password/role controls and safe legacy document previews. Native disk operations are tested with an explicit API test double; an actual campus PC save-dialog pilot is still needed.
 
 Campus Ethernet/Wi-Fi versus actual mobile data, iOS Safari/Android phones, external proxies buffering uploads, large sustained transfers and multiple seated staff have not been measured. These local results do not predict a guaranteed campus speed or uninterrupted connection. Collect both sides' sanitized system logs during the pilot and use the existing Cloudflare URL first.
+
+## Hosted verification, 13 October 2026
+
+The integrated implementation was committed as `e3a6561` and deployed to the existing Cloudflare Worker. Deployment version: `05719173-ba4f-49d0-a26a-766addb9857f`. The live service reports protocol 4 and app version `stream-v1`. The existing uos-file-transfer preview is Ready; main and Vercel production were not promoted.
+
+An exact-byte 8 MiB hosted transfer, approval, temporary-storage and diagnostic-redaction check passed from this PC in Chrome (7.370 s), Firefox (11.222 s) and WebKit (9.601 s). These hosted samples use the external Cloudflare path and must not be compared directly to local Wrangler samples. They are not campus/mobile-data measurements. Temporary accounts and desks were removed after the checks. Native save operations still used an API test double; a real campus PC save-dialog pilot remains required.
+
+The rebased suite has 25 passing unit/security tests, including retained visitor capacity/withdrawal and native connection safety checks. The credential-free CI loopback suite, actual local Wrangler browser suite, real-account regressions and native Miniflare socket/build checks passed. No GitHub-hosted workflow result was confirmed during this session.

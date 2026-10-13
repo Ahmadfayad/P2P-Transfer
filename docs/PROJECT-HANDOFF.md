@@ -46,3 +46,5 @@ Run `npm run check`, `npm test` and the browser scripts in `tests/`. Browser tes
 ## Streaming update, 13 October 2026
 
 The current stream protocol replaces document persistence and chunk retrieval with temporary encrypted streams. The existing student checking/waiting gate, staff approval popup, returning-visitor display and log sanitization are preserved. HTTP long polling supplies immediate notifications without requiring WebSockets. Metered/Open Relay is explicitly disabled; existing pilot secrets and metadata are retained but unused. See STREAMING.md for measurements and limitations.
+
+The streaming build is live at the existing Cloudflare URL. Deployment version: `05719173-ba4f-49d0-a26a-766addb9857f`; protocol 4 / app version `stream-v1`. Hosted exact-byte checks passed in Chrome, Firefox and WebKit from the personal PC. Their 8 MiB timings were 7.370 s, 11.222 s and 9.601 s respectively; campus/mobile-data behavior remains unverified. See STREAMING.md for the local latest-branch comparison (about 9.0 s before versus 4.5 s streaming), browser limits and remaining manual save-dialog pilot.
