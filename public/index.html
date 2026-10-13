@@ -59,7 +59,7 @@
           <h1>Your documents.<br />A clear destination.</h1>
           <p class="intro">
             Send a document to the desk, or receive one back. Private transfers
-            with a receipt you can trust.
+            without creating a student account.
           </p>
           <div class="features">
             <span>✓ Encrypted files</span><span>✓ HTTPS fallback</span
@@ -113,7 +113,13 @@
             <span class="eyebrow" id="role-label"></span>
             <h1 id="room-name"></h1>
             <p id="session-note"></p>
-            <div class="session-clock"><div id="session-clock-face" class="clock-face"><span id="session-clock-time">—</span><small id="session-clock-label">Time left</small></div><p id="session-countdown" role="status"></p></div>
+            <div class="session-clock">
+              <div id="session-clock-face" class="clock-face">
+                <span id="session-clock-time">—</span
+                ><small id="session-clock-label">Time left</small>
+              </div>
+              <p id="session-countdown" role="status"></p>
+            </div>
           </div>
           <button class="secondary" id="leave">Close this page</button>
         </div>
@@ -137,7 +143,7 @@
                 approval.
               </p>
             </section>
-            <section class="card">
+            <section class="card" id="connections-card">
               <h2 id="connections-heading">Active connections</h2>
               <div id="connections"></div>
               <details id="ended-connections" class="ended-connections" hidden>
@@ -148,16 +154,15 @@
               </details>
             </section>
             <section class="card quiet">
-              <h2>Keep the handover safe</h2>
+              <h2>Before you leave</h2>
               <p>
                 Keep both pages open until “Received” appears. Download received
                 files to keep them. Temporary files disappear when this page
                 closes or refreshes.
               </p>
               <p class="small">
-                Student connections last 10 minutes. PDF, DOCX, PNG and JPG ·
-                150 MB per file · 300 MB of temporary received files per page.
-                Download files before closing or refreshing.
+                PDF, DOCX, PNG and JPG · 150 MB per file · 300 MB of temporary
+                received files per page.
               </p>
             </section>
           </aside>
@@ -191,14 +196,57 @@
             <section class="card">
               <div class="section-heading">
                 <div>
-                  <span class="eyebrow">Sent and received</span>
-                  <h2>Your documents</h2>
+                  <span class="eyebrow">File exchange</span>
+                  <h2>Documents</h2>
                 </div>
                 <button class="secondary compact" id="export">
                   Export file history
                 </button>
               </div>
-              <div id="file-list" class="file-list" tabindex="-1" aria-label="Sent and received documents"><section id="received-documents" class="document-group incoming-group" tabindex="-1"><h3>↓ Documents you received</h3><p>From the other person · preview or download here</p><div id="received-list"></div></section><section class="document-group outgoing-group"><h3>↑ Documents you sent</h3><p>Your uploads · check delivery status here</p><div id="sent-list"></div></section></div>
+              <div
+                class="document-tabs"
+                role="tablist"
+                aria-label="Document direction"
+              >
+                <button
+                  id="incoming-tab"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="received-documents"
+                >
+                  Staff → You</button
+                ><button
+                  id="outgoing-tab"
+                  tabindex="-1"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="sent-documents"
+                >
+                  You → Staff
+                </button>
+              </div>
+              <div id="file-list" class="file-list">
+                <section
+                  id="received-documents"
+                  class="document-group incoming-group"
+                  role="tabpanel"
+                  aria-labelledby="incoming-tab"
+                  tabindex="-1"
+                >
+                  <h3 id="received-group-title">From your staff member</h3>
+                  <div id="received-list"></div>
+                </section>
+                <section
+                  id="sent-documents"
+                  class="document-group outgoing-group"
+                  role="tabpanel"
+                  aria-labelledby="outgoing-tab"
+                  hidden
+                >
+                  <h3 id="sent-group-title">Your uploads</h3>
+                  <div id="sent-list"></div>
+                </section>
+              </div>
             </section>
           </div>
         </div>
@@ -248,9 +296,7 @@
             maxlength="64"
             autocomplete="off"
         /></label>
-        <p class="small">
-          This label helps staff identify you. It does not verify your identity.
-        </p>
+        <p class="small">Staff will check these details with you.</p>
         <button type="submit">Request connection <span>↗</span></button>
       </form>
       <div id="student-phase" role="status" aria-live="polite" hidden>
@@ -333,10 +379,19 @@
         will approve your connection.
       </p>
     </section>
-    <footer>
-      Document Exchange <span>Private by design. Free to use.</span>
-    </footer>
-    <dialog id="received-notice" aria-labelledby="received-notice-title"><span class="eyebrow">New arrival</span><h2 id="received-notice-title">You have received documents</h2><p>Open the received section to preview or download them.</p><div class="actions"><button id="view-received" type="button">View documents</button><button id="dismiss-received" class="secondary" type="button">Later</button></div></dialog>
+    <footer>Document Exchange <span>University of Sharjah</span></footer>
+    <dialog id="received-notice" aria-labelledby="received-notice-title">
+      <span class="eyebrow">↓ Ready for you</span>
+      <h2 id="received-notice-title">Documents have arrived</h2>
+      <p id="received-notice-text">Ready to preview or download.</p>
+      <p id="received-notice-file" class="notice-file"></p>
+      <div class="actions">
+        <button id="view-received" type="button">View documents</button
+        ><button id="dismiss-received" class="secondary" type="button">
+          Not now
+        </button>
+      </div>
+    </dialog>
     <dialog id="preview">
       <div class="section-heading">
         <h2 id="preview-title"></h2>

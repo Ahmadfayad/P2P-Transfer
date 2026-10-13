@@ -164,7 +164,8 @@ if (typeof window !== "undefined") {
   panel.className = "diagnostics card";
   panel.innerHTML =
     '<summary>Having trouble?</summary><p>Download and share this log if a connection stalls. Passwords, invitation keys and document contents are excluded.</p><label>Current network<select><option>Unknown</option><option>University Wi-Fi</option><option>University Ethernet</option><option>Mobile data</option><option>Home network</option></select></label><button type="button" class="secondary">Download system log</button><p role="status"></p>';
-  document.querySelector("main")?.append(panel);
+  if (location.pathname !== "/student")
+    document.querySelector("main")?.append(panel);
   panel.querySelector("button").onclick = async () => {
     try {
       const c = navigator.connection;
@@ -173,7 +174,7 @@ if (typeof window !== "undefined") {
         session.server = session.server.map(diagnosticRecord);
       const report = {
         format: 2,
-        appVersion: "printed-desks-v1",
+        appVersion: "mobile-preview-v1",
         host: location.host,
         exportedAt: new Date().toISOString(),
         network: panel.querySelector("select").value,

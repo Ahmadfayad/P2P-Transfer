@@ -44,7 +44,9 @@ try {
     .waitFor();
   assert.equal(await guest.locator('input[type="url"]').count(), 0);
   assert.equal(await staff.locator("#desk-location").count(), 0);
-  await staff.request.post(base + "/api/desks", { data: { location: "Registrar Desk 4" } });
+  await staff.request.post(base + "/api/desks", {
+    data: { location: "Registrar Desk 4" },
+  });
   const created = staff.waitForResponse(
     (r) => r.url().endsWith("/api/rooms") && r.request().method() === "POST",
   );
@@ -59,12 +61,19 @@ try {
       })
     ).json(),
   );
-  await guest.getByRole("button", { name: "Check desk again" }).click();
+  await guest.route("**/api/desks/" + desk.id, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue();
+  });
+  await guest.goto(link.replace("/student#", "/student?scan=1#"));
+  await guest.locator("#student-waiting-spinner").waitFor();
+  assert.equal(await guest.locator("#welcome").isVisible(), false);
   await guest
     .getByText("You’re joining Test staff’s desk · Registrar Desk 4", {
       exact: true,
     })
     .waitFor();
+  await guest.unroute("**/api/desks/" + desk.id);
   await guest.locator("#student-name").fill("Fixture student");
   await guest.locator("#student-id").fill("U000123");
   await guest.getByRole("button", { name: "Request connection" }).click();
@@ -74,8 +83,14 @@ try {
     .waitFor();
   await staff.locator("#approval-approve").click();
   await guest.waitForFunction(() => !document.querySelector("#files").disabled);
-  assert.equal(await guest.locator("#room-name").textContent(), "Staff: Test staff");
-  assert.match(await guest.locator("#session-note").textContent(), /Your details: Fixture student · U000123/);
+  assert.equal(
+    await guest.locator("#room-name").textContent(),
+    "Staff: Test staff",
+  );
+  assert.match(
+    await guest.locator("#session-note").textContent(),
+    /Your details: Fixture student · U000123/,
+  );
   await staff.getByRole("button", { name: "Extend 10 minutes" }).click();
   await staff.waitForFunction(() =>
     document.querySelector("#sending-to").textContent.includes("U000123"),

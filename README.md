@@ -111,3 +111,7 @@ Staff work sessions stay open up to eight hours and close on explicit ending, si
 Files arrive automatically after one identity approval. Images show thumbnails, PDF/images support preview, and download is explicit. Received is distinguished from Download started; browser download initiation is not proof of disk completion. Leaving/changing desks warns about received files that have not had a download requested. New document contents and visitor credentials are not persisted. Connection activity lights are separate from Sending/Receiving/Received/Interrupted file status. Student file controls are simplified; technical diagnostics are under Having trouble? and staff file history remains exportable.
 
 Admins use Manage physical desks to update a location or reassign to an active employee email. If both employees already have desks, their assignments are swapped atomically, both active work sessions close, and both physical QR codes remain unchanged. **Replace printed QR** closes the desk and invalidates its old code; staff refresh and print the replacement. Only administrators can perform these operations.
+
+## Phone PDF preview
+
+PDFs render locally with the bundled Mozilla PDF.js library rather than relying on a native phone PDF viewer. Use Previous page / Next page in the preview. Rendering is temporary and bounded to one page; download a file to keep it. See docs/PROJECT-HANDOFF.md for the current direction tabs and student entry flow.

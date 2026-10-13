@@ -62,6 +62,12 @@ export async function cleanupAuthFixtures(additionalIds = []) {
       for (const desk of (await response.json()).desks.filter((d) =>
         owned.has(d.account),
       )) {
+        if (desk.room)
+          await fetch(base + "/api/admin/desks/" + desk.id, {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ rotate: true }),
+          });
         const removed = await fetch(base + "/api/admin/desks/" + desk.id, {
           method: "DELETE",
           headers,

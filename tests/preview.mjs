@@ -1,8 +1,8 @@
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { login, cleanupAuthFixtures } from "./auth-helper.mjs";
-const base = process.env.TEST_URL || "http://127.0.0.1:8787";
+const base = process.env.TEST_URL || "http://127.0.0.1:8788";
 let pdf = "%PDF-1.4\n";
 const offsets = [0];
 const stream = "BT /F1 20 Tf 50 750 Td (Document preview works) Tj ET";
@@ -27,9 +27,10 @@ pdf +=
   "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" +
   xref +
   "\n%%EOF\n";
-const browser = await chromium.launch({
+const engine = process.env.BROWSER || "chromium";
+const browser = await { chromium, firefox, webkit }[engine].launch({
   headless: true,
-  ...(process.env.CHROME_PATH
+  ...(engine === "chromium" && process.env.CHROME_PATH
     ? { executablePath: process.env.CHROME_PATH }
     : {}),
 });
@@ -75,23 +76,25 @@ try {
     .click();
   await page.waitForFunction(
     () =>
-      document.querySelector("#preview-content iframe")?.contentDocument
-        ?.contentType === "application/pdf",
+      document.querySelector("#preview-content canvas")?.dataset.rendered ===
+      "1",
   );
   await mkdir("test-results", { recursive: true });
   await page.screenshot({
     path: "test-results/pdf-preview.png",
     fullPage: true,
   });
-  console.log("PASS valid PDF loads the native PDF viewer");
+  console.log(
+    "PASS PDF renders locally to a canvas without a native browser viewer",
+  );
   await page.getByRole("button", { name: "Close preview" }).click();
   await row("fake.pdf")
     .getByRole("button", { name: "Preview", exact: true })
     .click();
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#preview-content iframe")?.contentDocument
-        ?.contentType === "application/pdf",
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#preview-content")
+      .textContent.includes("could not be previewed"),
   );
   assert.equal(await page.evaluate(() => window.previewAttack), undefined);
   console.log(

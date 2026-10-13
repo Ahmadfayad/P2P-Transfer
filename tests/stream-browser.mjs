@@ -1,5 +1,6 @@
 import { chromium, firefox, webkit } from "playwright";
 import assert from "node:assert/strict";
+import { pdfFixture } from "./pdf-fixture.mjs";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 const { login, credentials, cleanupAuthFixtures, testHeaders } = await import(
@@ -161,14 +162,19 @@ async function basic(options) {
         return data;
       };
     });
-  if (!baseline) for (const page of [pair.staff, pair.guest]) await page.evaluate(() => {
-    const original = Element.prototype.scrollIntoView;
-    window.receivedScrolls = 0;
-    Element.prototype.scrollIntoView = function (...args) {
-      if (this.id === "received-documents") { window.receivedScrolls++; window.lastScrollBehavior = args[0]?.behavior; }
-      return original.apply(this, args);
-    };
-  });
+  if (!baseline)
+    for (const page of [pair.staff, pair.guest])
+      await page.evaluate(() => {
+        const original = Element.prototype.scrollIntoView;
+        window.receivedScrolls = 0;
+        Element.prototype.scrollIntoView = function (...args) {
+          if (this.id === "received-documents") {
+            window.receivedScrolls++;
+            window.lastScrollBehavior = args[0]?.behavior;
+          }
+          return original.apply(this, args);
+        };
+      });
   const start = performance.now();
   await send(pair, name, bytes);
   if (options.direct) {
@@ -184,8 +190,13 @@ async function basic(options) {
         exact: true,
       })
       .waitFor({ timeout: 120000 });
-    if (!baseline) await pair.staff.waitForFunction(() => window.receivedScrolls === 1);
-    if (!baseline) assert.equal(await pair.staff.evaluate(() => window.lastScrollBehavior), "smooth");
+    if (!baseline)
+      await pair.staff.waitForFunction(() => window.receivedScrolls === 1);
+    if (!baseline)
+      assert.equal(
+        await pair.staff.evaluate(() => window.lastScrollBehavior),
+        "smooth",
+      );
     const downloaded = pair.staff.waitForEvent("download");
     await pair.staff
       .getByRole("button", {
@@ -227,9 +238,10 @@ async function basic(options) {
         }),
         0,
       );
-    await pair.guest.locator(".diagnostics summary").click();
-    const downloaded = pair.guest.waitForEvent("download");
-    await pair.guest
+    assert.equal(await pair.guest.locator(".diagnostics").count(), 0);
+    await pair.staff.locator(".diagnostics summary").click();
+    const downloaded = pair.staff.waitForEvent("download");
+    await pair.staff
       .getByRole("button", { name: "Download system log" })
       .click();
     const report = await readFile(await (await downloaded).path(), "utf8");
@@ -283,6 +295,18 @@ async function basic(options) {
     assert.deepEqual(await readFile(await (await back).path()), bytes);
     await pair.guest.setViewportSize({ width: 390, height: 844 });
     assert.equal(
+      await pair.guest.locator("#connections-card").isVisible(),
+      false,
+    );
+    assert.equal(
+      await pair.guest.evaluate(() => {
+        const c = document.querySelector(".clock-face").getBoundingClientRect(),
+          h = document.querySelector(".page-heading").getBoundingClientRect();
+        return Math.abs(c.x + c.width / 2 - h.x - h.width / 2) < 2;
+      }),
+      true,
+    );
+    assert.equal(
       await pair.guest.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
@@ -303,15 +327,26 @@ async function basic(options) {
     });
     await pair.guest.locator(".file-thumbnail").waitFor({ timeout: 30000 });
     await pair.guest.locator("#received-notice").waitFor();
-    await pair.guest.screenshot({ path: "test-results/phone-received-popup.png" });
+    await pair.guest.screenshot({
+      path: "test-results/phone-received-popup.png",
+    });
     assert.equal(await pair.guest.evaluate(() => window.receivedScrolls), 1);
     await pair.guest.locator("#view-received").click();
     await pair.guest.waitForFunction(() => window.receivedScrolls === 2);
-    assert.equal(await pair.guest.locator("#received-notice").isVisible(), false);
-    await pair.guest.screenshot({ path: "test-results/student-mobile.png", fullPage: true });
+    assert.equal(
+      await pair.guest.locator("#received-notice").isVisible(),
+      false,
+    );
+    await pair.guest.screenshot({
+      path: "test-results/student-mobile.png",
+      fullPage: true,
+    });
     assert.equal(await pair.guest.locator("#received-list .file").count(), 2);
     assert.equal(await pair.guest.locator("#sent-list .file").count(), 1);
-    assert.match(await pair.guest.locator("#session-clock-time").textContent(), /^\d+:\d{2}$/);
+    assert.match(
+      await pair.guest.locator("#session-clock-time").textContent(),
+      /^\d+:\d{2}$/,
+    );
     assert.equal(
       await pair.guest
         .locator(".file-thumbnail")
@@ -325,6 +360,36 @@ async function basic(options) {
       .getByRole("button", { name: "Preview", exact: true })
       .click();
     await pair.guest.locator("#preview-content img").waitFor();
+    await pair.guest.getByRole("button", { name: "Close preview" }).click();
+    await pair.staff
+      .locator("#files")
+      .setInputFiles({
+        name: "phone-preview.pdf",
+        mimeType: "application/pdf",
+        buffer: Buffer.from(pdfFixture()),
+      });
+    await pair.guest.locator("#received-notice").waitFor();
+    await pair.guest.locator("#view-received").click();
+    const pdfRow = pair.guest
+      .locator("#received-list .file")
+      .filter({
+        has: pair.guest.getByText("phone-preview.pdf", { exact: true }),
+      });
+    await pdfRow.getByRole("button", { name: "Preview", exact: true }).click();
+    await pair.guest.waitForFunction(
+      () =>
+        document.querySelector("#preview-content canvas")?.dataset.rendered ===
+        "1",
+    );
+    await pair.guest.getByRole("button", { name: "Next page" }).click();
+    await pair.guest.waitForFunction(
+      () =>
+        document.querySelector("#preview-content canvas")?.dataset.rendered ===
+        "2",
+    );
+    await pair.guest.screenshot({
+      path: "test-results/received-pdf-" + engine + ".png",
+    });
     await pair.guest.getByRole("button", { name: "Close preview" }).click();
     await pair.staff.screenshot({
       path: "test-results/staff-auto-receive.png",

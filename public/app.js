@@ -255,7 +255,7 @@ async function download(file) {
     await renderFiles();
   }
 }
-function preview(file) {
+async function preview(file) {
   const type = fileType(file.name);
   if (
     !file.completed ||
@@ -272,16 +272,18 @@ function preview(file) {
     img.alt = file.name;
     $("preview-content").append(img);
   } else {
-    const frame = element("iframe");
-    frame.src = previewURL;
-    frame.title = "PDF document preview";
-    // Chrome's native PDF viewer needs this frame unsandboxed; only a fixed PDF MIME reaches it.
-    $("preview-content").append(frame);
+    $("preview-content").textContent = "Opening PDF…";
+    $("preview").showModal();
+    const { openPDF } = await import("./pdf-preview.js");
+    if ($("preview").open) await openPDF(file.blob, $("preview-content"));
+    return;
   }
   $("preview").showModal();
 }
 $("close-preview").onclick = () => $("preview").close();
 $("preview").onclose = () => {
+  $("preview-content").pdfCleanup?.();
+  $("preview-content").pdfCleanup = null;
   if (previewURL) URL.revokeObjectURL(previewURL);
   previewURL = null;
   $("preview-content").replaceChildren();
@@ -327,12 +329,40 @@ async function removeFile(file) {
   }
   await renderFiles();
 }
+function selectDocuments(incoming) {
+  $("received-documents").hidden = !incoming;
+  $("sent-documents").hidden = incoming;
+  $("incoming-tab").setAttribute("aria-selected", String(incoming));
+  $("outgoing-tab").setAttribute("aria-selected", String(!incoming));
+  $("incoming-tab").tabIndex = incoming ? 0 : -1;
+  $("outgoing-tab").tabIndex = incoming ? -1 : 0;
+}
+$("incoming-tab").onclick = () => selectDocuments(true);
+$("outgoing-tab").onclick = () => selectDocuments(false);
+for (const id of ["incoming-tab", "outgoing-tab"])
+  $(id).onkeydown = (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const incoming =
+      event.key === "Home" || (event.key !== "End" && id === "outgoing-tab");
+    selectDocuments(incoming);
+    $(incoming ? "incoming-tab" : "outgoing-tab").focus();
+  };
 function revealReceived() {
+  selectDocuments(true);
   const target = $("received-documents");
-  target.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+  target.scrollIntoView({
+    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "instant"
+      : "smooth",
+    block: "start",
+  });
   target.focus({ preventScroll: true });
 }
-$("view-received").onclick = () => { $("received-notice").close(); revealReceived(); };
+$("view-received").onclick = () => {
+  $("received-notice").close();
+  revealReceived();
+};
 $("dismiss-received").onclick = () => $("received-notice").close();
 async function renderFiles() {
   const files = [
@@ -355,11 +385,49 @@ async function renderFiles() {
     older.push(...current);
     current.length = 0;
   }
-  renderList($("received-list"), current.filter((file) => file.kind === "incoming"), true);
-  renderList($("sent-list"), current.filter((file) => file.kind !== "incoming"), true);
-  const newlyReceived = current.filter((file) => file.kind === "incoming" && file.completed && file.blob && !revealedDocuments.has(file.id));
+  renderList(
+    $("received-list"),
+    current.filter((file) => file.kind === "incoming"),
+    true,
+  );
+  renderList(
+    $("sent-list"),
+    current.filter((file) => file.kind !== "incoming"),
+    true,
+  );
+  $("incoming-tab").textContent =
+    (guest ? "Staff → You" : "Students → You") +
+    " · " +
+    current.filter((file) => file.kind === "incoming").length;
+  $("outgoing-tab").textContent =
+    (guest ? "You → Staff" : "You → Students") +
+    " · " +
+    current.filter((file) => file.kind !== "incoming").length;
+  $("received-group-title").textContent = guest
+    ? "From " + (session?.name || "your staff member")
+    : "From your students";
+  $("sent-group-title").textContent = guest
+    ? "You sent to " + (session?.name || "staff")
+    : "You sent to students";
+  const newlyReceived = current.filter(
+    (file) =>
+      file.kind === "incoming" &&
+      file.completed &&
+      file.blob &&
+      !revealedDocuments.has(file.id),
+  );
   if (newlyReceived.length && !$("workspace").hidden) {
     newlyReceived.forEach((file) => revealedDocuments.add(file.id));
+    const source = guest
+      ? session.name
+      : lastState?.peers.find((peer) => peer.id === newlyReceived[0].from)
+          ?.name || "a student";
+    $("received-notice-title").textContent =
+      newlyReceived.length === 1
+        ? "A document is ready"
+        : "New documents are ready";
+    $("received-notice-text").textContent = "From " + source;
+    $("received-notice-file").textContent = newlyReceived[0].name;
     if (matchMedia("(max-width: 700px)").matches) {
       if (!$("received-notice").open) $("received-notice").showModal();
     } else revealReceived();
@@ -372,7 +440,17 @@ async function renderFiles() {
 function renderList(container, files, current) {
   container.replaceChildren();
   if (!files.length) {
-    container.append(element("p", container.id === "received-list" ? "No documents received yet." : container.id === "sent-list" ? "You haven’t sent any documents yet." : "Your documents will appear here.", "empty"));
+    container.append(
+      element(
+        "p",
+        container.id === "received-list"
+          ? "No documents received yet."
+          : container.id === "sent-list"
+            ? "You haven’t sent any documents yet."
+            : "Your documents will appear here.",
+        "empty",
+      ),
+    );
     return;
   }
   for (const file of files.sort((a, b) => b.created - a.created)) {
@@ -398,11 +476,17 @@ function renderList(container, files, current) {
           ? "Received locally · receipt unavailable"
           : "Interrupted — send again"
         : file.saveState === "disk-saved"
-          ? "Saved to disk ✓"
+          ? incoming
+            ? "Saved to disk ✓"
+            : "Recipient saved to disk ✓"
           : file.saveState === "download-initiated"
-            ? "Download started"
+            ? incoming
+              ? "Download started"
+              : "Recipient started download"
             : received
-              ? incoming ? "Received — download to keep it" : "Delivered to recipient"
+              ? incoming
+                ? "Received — download to keep it"
+                : "Delivered to recipient"
               : t?.state === "offered"
                 ? "Starting transfer…"
                 : incoming
@@ -423,10 +507,14 @@ function renderList(container, files, current) {
       element("span", status, "status" + (received ? " received" : "")),
     );
     const peer = incoming ? file.from : file.to;
+    const matchedPeer = lastState?.peers.find((p) => p.id === peer);
     const name =
       peer === "desk"
         ? session?.name || "Desk"
-        : lastState?.peers.find((p) => p.id === peer)?.name || "Student";
+        : matchedPeer
+          ? matchedPeer.name +
+            (matchedPeer.studentId ? " · " + matchedPeer.studentId : "")
+          : "Student";
     row.append(
       line,
       element(
@@ -510,7 +598,10 @@ function renderState(state) {
     session.studentName ||= own?.name;
     session.expires = own?.expires || session.expires;
     $("session-note").textContent =
-      "Your details: " + (own?.name || session.studentName || "Student") + (own?.studentId ? " · " + own.studentId : "") + ". Connected to " +
+      "Your details: " +
+      (own?.name || session.studentName || "Student") +
+      (own?.studentId ? " · " + own.studentId : "") +
+      ". Connected to " +
       session.name +
       "’s desk" +
       (session.location ? " · " + session.location : "");
@@ -524,7 +615,7 @@ function renderState(state) {
     );
   }
   $("send-note").textContent = approved
-    ? "Files arrive automatically. Preview or download below. Keep both pages open; refreshing requires a new connection and resending unfinished files."
+    ? "Files send as soon as you choose them."
     : own?.state === "declined"
       ? "The desk declined this connection. Ask staff for help."
       : "File access is locked until staff approve you.";
@@ -699,11 +790,27 @@ setInterval(() => {
   const left = Math.ceil((session.expires - Date.now()) / 1000);
   const active = lastState?.transfers.some((t) => t.state === "accepted");
   const remaining = Math.max(0, left);
-  $("session-clock-time").textContent = (remaining >= 3600 ? Math.floor(remaining / 3600) + ":" + String(Math.floor(remaining / 60) % 60).padStart(2, "0") : Math.floor(remaining / 60)) + ":" + String(remaining % 60).padStart(2, "0");
+  $("session-clock-time").textContent =
+    (remaining >= 3600
+      ? Math.floor(remaining / 3600) +
+        ":" +
+        String(Math.floor(remaining / 60) % 60).padStart(2, "0")
+      : Math.floor(remaining / 60)) +
+    ":" +
+    String(remaining % 60).padStart(2, "0");
   $("session-clock-label").textContent = guest ? "Connection" : "Desk session";
-  $("session-clock-face").style.setProperty("--clock-progress", Math.min(1, remaining / (guest ? 600 : 28800)) * 360 + "deg");
+  $("session-clock-face").style.setProperty(
+    "--clock-progress",
+    Math.min(1, remaining / (guest ? 600 : 28800)) * 360 + "deg",
+  );
   $("session-countdown").textContent = guest
-    ? left > 0 ? left <= 60 ? "Less than a minute left. Ask staff to extend if needed." : "Time left in your connection" : active && left > -120 ? "Finishing your transfer · up to 2 extra minutes" : "Connection ended"
+    ? left > 0
+      ? left <= 60
+        ? "Less than a minute left. Ask staff to extend if needed."
+        : "Time left in your connection"
+      : active && left > -120
+        ? "Finishing your transfer · up to 2 extra minutes"
+        : "Connection ended"
     : "Time left for your desk. Students connect for 10 minutes.";
   if (left > 0 || (guest && active && left > -120)) return;
   exchange.stop();
@@ -852,7 +959,7 @@ async function poll(instance) {
       $("network").textContent = "Session ended";
       if (guest) showStudentPhase("ended");
       else showApproval(null);
-      message(error.message + " Saved files remain on this device.");
+      message(error.message + " Downloaded files remain on your device.");
       renderFiles().catch((e) => message(e.message));
       return;
     }
@@ -917,6 +1024,7 @@ async function begin(saved) {
     ".";
   $("leave").textContent = desk ? "End desk session" : "Change desk";
   $("invite-card").hidden = !desk;
+  $("connections-card").hidden = !desk;
   $("recipient-label").hidden = !desk;
   $("export").hidden = !desk;
   if (desk) {
@@ -1119,6 +1227,7 @@ async function choose(files) {
   for (const file of files) {
     try {
       await exchange.queue(file, to);
+      selectDocuments(false);
     } catch (e) {
       message(e.message);
       break;
@@ -1185,11 +1294,12 @@ async function init() {
       $("welcome").querySelector(".features").innerHTML =
         "<span>01 · Connect</span><span>02 · Get approved</span><span>03 · Exchange files</span>";
       $("login").hidden = true;
-      $("welcome").hidden = false;
+      $("welcome").hidden = Boolean(printed || invitation);
       $("desk-form").hidden = true;
       $("join-form").hidden = !invitation;
       $("student-start").hidden = Boolean(invitation);
       if (printed) {
+        showStudentPhase("checking");
         await resolvePrintedDesk();
         return;
       }
@@ -1238,8 +1348,8 @@ async function init() {
   } catch (e) {
     $("network").textContent = "Service unavailable";
     $("network").classList.add("error");
+    if (guest && $("student-gate").open) showStudentPhase("ended");
     message(e.message);
   }
 }
 init();
-

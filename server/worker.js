@@ -361,7 +361,7 @@ export default {
       );
     const headers = new Headers(response.headers);
     headers.set("X-Request-ID", requestId);
-    headers.set("X-App-Version", "printed-desks-v1");
+    headers.set("X-App-Version", "mobile-preview-v1");
     if (
       url.pathname.startsWith("/api/") &&
       response.status >= 400 &&
@@ -389,7 +389,7 @@ export default {
     );
     headers.set(
       "Content-Security-Policy",
-      `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+      `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
     );
     if (response.status === 101)
       return new Response(null, {

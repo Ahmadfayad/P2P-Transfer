@@ -59,8 +59,7 @@
             <span class="eyebrow">Your control centre</span>
             <h1>Manage users</h1>
             <p>
-              A place for every person. Create accounts, assign access and keep
-              your team connected.
+              Create employee accounts and assign staff or administrator access.
             </p>
           </div>
           <button id="add-user-open" type="button" class="hero-button">
@@ -190,12 +189,25 @@
           <p id="admin-error" role="alert"></p>
         </section>
       </div>
+      <section class="card" id="desk-administration" hidden>
+        <span class="eyebrow">Printed invitations</span>
+        <h2>Manage physical desks</h2>
+        <p>
+          Reassign a desk or update its location while keeping the printed QR.
+          If the employee already has a desk, their desk assignments are swapped
+          and both active connections close. Replace the QR if copied or
+          misused; the old printout stops working.
+        </p>
+        <button id="refresh-desks" class="secondary">Refresh desks</button>
+        <div id="admin-desks"></div>
+        <p id="desk-admin-error" role="alert"></p>
+      </section>
     </main>
     <div id="admin-toast" class="admin-toast" role="status" hidden></div>
     <dialog id="add-user-dialog" class="account-dialog">
       <div class="section-heading">
         <div>
-          <span class="eyebrow">Grow your team</span>
+          <span class="eyebrow">Employee account</span>
           <h2>Add a user</h2>
         </div>
         <button
@@ -207,7 +219,7 @@
           ✕
         </button>
       </div>
-      <p>Create an account and choose what this person can do.</p>
+      <p>Choose staff or administrator access for this employee.</p>
       <form id="add-user-form" method="post">
         <label
           >Full name<input
@@ -303,18 +315,7 @@
         <p id="password-error" role="status"></p>
       </form>
     </dialog>
-    <section class="card" id="desk-administration" hidden>
-      <span class="eyebrow">Printed invitations</span>
-      <h2>Manage physical desks</h2>
-      <p>
-        Reassign a desk or update its location while keeping the printed QR. If
-        the employee already has a desk, their desk assignments are swapped and
-        both active connections close. Replace the QR if copied or misused; the
-        old printout stops working.
-      </p>
-      <button id="refresh-desks" class="secondary">Refresh desks</button>
-      <div id="admin-desks"></div>
-      <p id="desk-admin-error" role="alert"></p>
-    </section>
+
+    <footer>Document Exchange <span>University of Sharjah</span></footer>
   </body>
 </html>
